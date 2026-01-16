@@ -1308,9 +1308,9 @@ def write_similarity_csv(output_path: str,
     data = {'Name': library_names}
     for j, template_name in enumerate(template_names):
         data[f'Similarity_{template_name}'] = sim_matrix[:, j]
-    
+
     df = pd.DataFrame(data)
-    df.to_csv(output_path, index=False)
+    df.to_csv(output_path, index=False, float_format='%.5f')
 
 
 # ============================================================================
