@@ -76,6 +76,13 @@ python smiles_similarity_kernels.py \
     output.csv \
     --method lingo
 
+# exptected content of output.csv:
+# Name,Similarity_0054-0090,Similarity_0133-0086
+# 0054-0090,1.00000,0.39080
+# 0061-0013,0.06061,0.12500
+# 0062-0039,0.00000,0.00000
+# ...
+
 # Use all available methods
 python smiles_similarity_kernels.py \
     templates.smi \
