@@ -1,14 +1,14 @@
 # SMILES-based Similarity Kernels
 
-Semi-automatic (with claude.ai), but validated, python implementation of the java [SMILES-based compound similarity functions for ligand-based virtual screening](https://github.com/hkmztrk/SMILESbasedSimilarityKernels/).
+*Semi-automatic* (with claude.ai), but validated, python implementation of the java [SMILES-based compound similarity functions for ligand-based virtual screening](https://github.com/hkmztrk/SMILESbasedSimilarityKernels/).
 
 > [!CAUTION]
 > according to my analysis, the original implementation may contain some inconsistencies and differences to what is described in the manuscript. This implementation tries to fix it (see below)
-> Also here I use encoding for more "two symbol" elements (Mg, Si etc, see below)
+> Also here I use encoding for more "two symbol" elements (Mg, Si etc, see below - not perfect but reasonable)
 
 ## Overview
 
-This module provides **11 similarity methods** for comparing chemical compounds represented as SMILES strings. These methods are used for ligand-based virtual screening, particularly for discovering small-molecule binders to nucleic acids (RNA/DNA).
+This module provides **11 similarity methods** for comparing chemical compounds represented as SMILES strings. These methods are used for ligand-based virtual screening, particularly for discovering small-molecule binders to nucleic acids (RNA/DNA - NEW) or proteins (original work).
 
 ## Citation
 
@@ -313,14 +313,49 @@ processed = preprocess_smiles(original)
 print(processed)  # "CCCL"
 ```
 
-**Replacement table:**
-| Original | Replaced | Original | Replaced | Original | Replaced |
-|----------|----------|----------|----------|----------|----------|
-| Cl | L | Br | R | Si | G |
-| Se | E | As | D | Te | T |
-| Na | Y | Ca | W | Mg | M |
-| Fe | X | Zn | Z | Cu | Q |
-| *(+15 more metals)* | | | | | |
+**Replacement table:** - not perfect but reasonable
+
+```python
+ELEMENT_REPLACEMENTS = {
+    # Halogens
+    'Cl': 'L',
+    'Br': 'R',
+    # Metalloids and other elements
+    'Si': 'G',
+    'Se': 'E',
+    'se': 'e',  # aromatic selenium
+    'As': 'D',
+    'as': 'd',  # aromatic arsenic
+    'Te': 'T',
+    'te': 't',  # aromatic tellurium
+    # Metals commonly found in SMILES
+    'Na': 'Y',
+    'Ca': 'W',
+    'Mg': 'M',
+    'Fe': 'X',
+    'Zn': 'Z',
+    'Cu': 'Q',
+    'Mn': 'J',
+    'Co': 'K',
+    'Ni': 'U',
+    'Al': 'A',
+    'Li': 'V',
+    'Ag': '!',
+    'Au': '$',
+    'Pt': '&',
+    'Pd': '^',
+    'Cr': '~',
+    'Ti': '`',
+    'Sn': ';',
+    'Pb': ':',
+    'Hg': '?',
+    'Cd': '<',
+    'Ba': '>',
+    'Sr': '{',
+    'Bi': '}',
+    'Sb': '|',
+}
+```
 
 **When preprocessing is used:**
 - Edit, NLCS, CLCS: ✓ Yes (by default)
@@ -588,17 +623,15 @@ Python:   0.6 ✅ PASS
 Java:     0.571 ❌ FAIL
 ```
 
-### ⚠️ Known Issues in Java Implementation
+### Known Issues in Java Implementation
 
-The original Java implementation has the following confirmed bugs:
+The original Java implementation may have the following *features*:
 
 1. **NLCS**: Wrong formula (24-29% error)
 2. **CLCS**: Inherits NLCS error
 3. **Edit**: Minor formula difference (5-13% error)
 4. **LINGO**: False positives (reports similarity when none exists)
 5. **SMIfp**: Potential calculation errors (up to 170% error in some cases)
-
-**Recommendation:** Use this Python implementation for scientific work. It has been validated against literature formulas and produces mathematically correct results.
 
 ## Performance Considerations
 
@@ -654,8 +687,3 @@ sim = lingo_similarity("CC", "CO", q=5)  # Both have length < 5
 sim = lingo_similarity("CC", "CO", q=2)  # Works fine
 ```
 
-### Different Results from Java
-
-This is expected! Python implementation is **correct according to literature**. Java has bugs.
-
-See "Differences from Java Implementation" section above.
