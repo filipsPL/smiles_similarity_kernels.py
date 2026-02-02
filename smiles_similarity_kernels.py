@@ -100,7 +100,7 @@ ELEMENT_REPLACEMENTS = {
     'Sb': '|',
 }
 
-# Reverse mapping for decoding (if needed)
+# Reverse mapping for decoding (if needed) - not needed, indeed, but may be useful.
 ELEMENT_REVERSE = {v: k for k, v in ELEMENT_REPLACEMENTS.items()}
 
 

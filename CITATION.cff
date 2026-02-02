@@ -1,0 +1,33 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: >-
+  Python implementation of the java SMILES-based compound similarity functions for ligand-based virtual screening
+type: dataset
+authors:
+  - orcid: "https://orcid.org/0000-0001-5758-9416"
+    given-names: Filip Stefaniak
+    affiliation: >-
+      International Institute of Molecular and Cell
+      Biology in Warsaw, Warsaw, Poland
+    email: fstefaniak@iimcb.gov.pl
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.18457244
+    description: Zenodo repository
+abstract: >-
+  This module provides 11 similarity methods for comparing chemical compounds represented as SMILES strings. These methods are used for ligand-based virtual screening, particularly for discovering small-molecule binders to nucleic acids (RNA/DNA - NEW) or proteins (original work).
+keywords:
+  - SMILES
+  - similarity
+  - kernel
+  - cheminformatics
+  - virtual screening
+  - ligand-based virtual screening
+  - small molecules
+  - RNA binders
+  - DNA binders
+  - protein binders
+  - machine learning
+license: CC0-1.0
