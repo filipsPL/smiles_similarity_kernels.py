@@ -365,10 +365,10 @@ ELEMENT_REPLACEMENTS = {
 ```
 
 **When preprocessing is used:**
-- Edit, NLCS, CLCS: ✓ Yes (by default)
-- LINGO: ✓ Yes (by default)
-- Substring: ✓ Yes (by default)
-- SMIfp: ✓ Yes (this implementation)
+- Edit, NLCS, CLCS:  Yes (by default)
+- LINGO:  Yes (by default)
+- Substring:  Yes (by default)
+- SMIfp:  Yes (this implementation)
 
 **Rationale:** Preprocessing ensures consistent character-level operations. For example, "CCCl" should be treated as 4 characters (C-C-C-L), not 5 (C-C-C-l).
 
@@ -576,49 +576,49 @@ python smiles_similarity_kernels.py \
 
 This Python implementation differs from the original Java implementation in several important ways:
 
-### ✅ Corrected Implementations
+### Corrected Implementations
 
 **1. NLCS Formula (CRITICAL)**
 
 | Implementation | Formula | Status |
 |----------------|---------|--------|
-| **Python (this)** | `LCS²/(len1×len2)` | ✅ Correct (matches literature) |
-| **Java (original)** | Unknown variant | ❌ Wrong (produces 24-29% error) |
+| **Python (this)** | `LCS²/(len1×len2)` | Correct (matches literature) |
+| **Java (original)** | Unknown variant | Wrong (produces 24-29% error) |
 
 **Example:**
 ```
 SMILES: "CCC" vs "CCCCC"
 LCS = 3
 
-Python: 3² / (3×5) = 9/15 = 0.600  ✅
-Java:   0.457                       ❌ (should be 0.6)
+Python: 3² / (3×5) = 9/15 = 0.600  OK
+Java:   0.457                       WRONG (should be 0.6)
 ```
 
 **2. Edit Distance Formula**
 
 | Implementation | Normalization | Status |
 |----------------|---------------|--------|
-| **Python (this)** | `max(len1, len2)` | ✅ Correct |
-| **Java (original)** | Unknown | ⚠️ Minor differences (5-13%) |
+| **Python (this)** | `max(len1, len2)` | Correct |
+| **Java (original)** | Unknown | Minor differences (5-13%) |
 
 **3. LINGO Edge Cases**
 
 | Case | Python (this) | Java (original) |
 |------|---------------|-----------------|
 | Both have 0 LINGOs | 1.0 (equally empty) | 0.0 (no comparison) |
-| Template has 0 LINGOs | 0.0 (cannot compare) | May return non-zero ❌ |
-| No common LINGOs | 0.0 (no similarity) | May return non-zero ❌ |
+| Template has 0 LINGOs | 0.0 (cannot compare) | May return non-zero (wrong) |
+| No common LINGOs | 0.0 (no similarity) | May return non-zero (wrong) |
 
 **Python's behavior is more consistent with the mathematical definition.**
 
-### 🔄 Design Differences (Intentional)
+### Design Differences (Intentional)
 
 **1. SMILES Preprocessing**
 
 | Feature | Python (this) | Java (original) |
 |---------|---------------|-----------------|
-| Multi-char atoms (Cl→L) | ✓ Preprocessed | ✗ Not preprocessed |
-| Ring normalization | ✓ For LINGO | ✗ Not normalized |
+| Multi-char atoms (Cl→L) | Preprocessed | Not preprocessed |
+| Ring normalization | For LINGO | Not normalized |
 
 **Impact:** Python provides more consistent character-level representations.
 
@@ -640,20 +640,20 @@ Java:   0.457                       ❌ (should be 0.6)
 
 **Python is more flexible** - can output both normalized similarity and raw kernel value.
 
-### 📊 Validation Results
+### Validation Results
 
 The Python implementation has been validated against literature formulas:
 
 ```
 Test: NLCS("ABC", "AC") 
 Expected: 0.6667 (from literature)
-Python:   0.6667 ✅ PASS
-Java:     0.XXXX ❌ FAIL
+Python:   0.6667 PASS
+Java:     0.XXXX FAIL
 
 Test: Edit("CCC", "CCCCC")
 Expected: 0.6 (1 - 2/5)
-Python:   0.6 ✅ PASS  
-Java:     0.571 ❌ FAIL
+Python:   0.6 PASS
+Java:     0.571 FAIL
 ```
 
 ### Known Issues in Java Implementation
