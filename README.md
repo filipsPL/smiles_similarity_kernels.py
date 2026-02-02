@@ -3,7 +3,7 @@
 *Semi-automatic* (with claude.ai), but validated, python implementation of the java [SMILES-based compound similarity functions for ligand-based virtual screening](https://github.com/hkmztrk/SMILESbasedSimilarityKernels/).
 
 > [!CAUTION]
-> according to my analysis, the original implementation may contain some inconsistencies and differences to what is described in the manuscript. This implementation tries to fix it (see below)
+> according to my analysis, the original implementation may contain some inconsistencies and differences to what is described in the manuscript. This implementation tries to fix it (see below).
 > Also here I use encoding for more "two symbol" elements (Mg, Si etc, see below - not perfect but reasonable)
 
 ## Overview
