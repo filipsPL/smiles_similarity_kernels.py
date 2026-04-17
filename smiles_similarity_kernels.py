@@ -53,37 +53,74 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
 
+# Optional import for RDKit (SMILES canonicalization and InChI conversion)
+try:
+    from rdkit import Chem
+    try:
+        from rdkit.Chem.inchi import MolToInchi          # RDKit >= 2020
+    except ImportError:
+        from rdkit.Chem.rdinchi import MolToInchi        # older RDKit
+    RDKIT_AVAILABLE = True
+except ImportError:
+    RDKIT_AVAILABLE = False
+
+# Optional import for jellyfish (Damerau-Levenshtein, Jaro, Jaro-Winkler, Hamming)
+try:
+    import jellyfish
+    JELLYFISH_AVAILABLE = True
+except ImportError:
+    JELLYFISH_AVAILABLE = False
+
 
 # ============================================================================
 # SMILES Preprocessing
 # ============================================================================
 
-# Complete mapping of multi-character elements to single characters
-# Using characters that don't appear in standard SMILES notation
+# Complete mapping of multi-character elements to single characters.
+# Unicode characters are used for metals/rare elements to guarantee no
+# collision with any standard SMILES character or with each other.
+# Longer patterns (e.g. '@@', '@TH1') MUST be matched before shorter
+# prefixes — the regex-based preprocess_smiles handles this automatically.
 ELEMENT_REPLACEMENTS = {
-    # Halogens
+    # --- Stereochemistry (must precede bare '@') ---
+    '@@': '¡',      # counterclockwise chirality
+    '@TH1': '¢',
+    '@TH2': '£',
+    '@AL1': '¤',
+    '@AL2': '¥',
+    '@SP1': '¦',
+    '@SP2': '§',
+    '@SP3': '¨',
+    '@TB': '©',     # trigonal bipyramidal (followed by digits)
+    '@OH': 'ª',     # octahedral (followed by digits)
+
+    # --- Halogens ---
     'Cl': 'L',
     'Br': 'R',
-    # Metalloids and other elements
+
+    # --- Metalloids and chalcogens ---
     'Si': 'G',
     'Se': 'E',
-    'se': 'e',  # aromatic selenium
+    'se': 'e',      # aromatic selenium
     'As': 'D',
-    'as': 'd',  # aromatic arsenic
+    'as': 'd',      # aromatic arsenic
     'Te': 'T',
-    'te': 't',  # aromatic tellurium
-    # Metals commonly found in SMILES
+    'te': 't',      # aromatic tellurium
+    'Ge': '«',
+    'Ga': '¬',
+
+    # --- Common metals ---
     'Na': 'Y',
-    'Ca': 'W',
+    'Ca': 'Ω',
     'Mg': 'M',
     'Fe': 'X',
     'Zn': 'Z',
     'Cu': 'Q',
     'Mn': 'J',
     'Co': 'K',
-    'Ni': 'U',
+    'Ni': 'Θ',
     'Al': 'A',
-    'Li': 'V',
+    'Li': 'Λ',
     'Ag': '!',
     'Au': '$',
     'Pt': '&',
@@ -98,49 +135,94 @@ ELEMENT_REPLACEMENTS = {
     'Sr': '{',
     'Bi': '}',
     'Sb': '|',
+
+    # --- Extended / rare metals ---
+    'In': '®',
+    'Tl': '¯',
+    'Be': '°',
+    'Ra': '±',
+    'Ru': '²',
+    'Rh': '³',
+    'Os': '´',
+    'Ir': 'µ',
+    'Mo': '¶',
+    'Nb': '¹',
+    'Ta': 'º',
+    'Re': '»',
+    'Tc': '¼',
+
+    # Single-character element symbols that would otherwise be confused
+    # with SMILES atom tokens if left unencoded when they appear inside
+    # bracket atoms (e.g. [W], [V], [U]).  We encode them here so that
+    # downstream string-similarity methods treat them as atomic units.
+    'W': '·',       # Tungsten
+    'V': '¸',       # Vanadium
+    'U': 'Ë',       # Uranium
+
+    # --- Lanthanides / actinides ---
+    'La': '½',
+    'Ce': '¾',
+    'Pr': '¿',
+    'Nd': 'À',
+    'Sm': 'Á',
+    'Eu': 'Â',
+    'Gd': 'Ã',
+    'Tb': 'Ä',
+    'Dy': 'Å',
+    'Ho': 'Æ',
+    'Er': 'Ç',
+    'Tm': 'È',
+    'Yb': 'É',
+    'Lu': 'Ê',
 }
 
 # Reverse mapping for decoding (if needed) - not needed, indeed, but may be useful.
 ELEMENT_REVERSE = {v: k for k, v in ELEMENT_REPLACEMENTS.items()}
+
+# Pre-compiled regex for fast, correct multi-character element replacement.
+# Keys are sorted longest-first so that longer patterns (e.g. '@@', '@TH1')
+# are always matched before shorter prefixes (e.g. '@'), avoiding partial
+# replacements that sequential str.replace() calls would produce.
+_PREPROCESS_PATTERN = re.compile(
+    '|'.join(
+        re.escape(k)
+        for k in sorted(ELEMENT_REPLACEMENTS.keys(), key=len, reverse=True)
+    )
+)
 
 
 def preprocess_smiles(smiles: str) -> str:
     """
     Preprocess SMILES string by replacing multi-character atoms with single characters.
     This is required for accurate string-based similarity calculations.
-    
-    As specified in Ã–ztÃ¼rk et al. (2016):
-    "All SMILES strings are modified such that atoms represented with 
+
+    As specified in Öztürk et al. (2016):
+    "All SMILES strings are modified such that atoms represented with
     two characters such as 'Cl' and 'Br' are replaced with single characters."
-    
+
     Parameters
     ----------
     smiles : str
         Input SMILES string
-        
+
     Returns
     -------
     str
         Preprocessed SMILES string with all multi-character elements
         replaced by single characters
-        
+
     Examples
     --------
     >>> preprocess_smiles("CCCCl")
     'CCCL'
     >>> preprocess_smiles("c1ccc(Br)cc1")
     'c1ccc(R)cc1'
+    >>> preprocess_smiles("C[C@@H](Cl)Br")
+    'C[C¡H](L)R'
     """
-    result = smiles
-    
-    # Sort by length (descending) to handle longer patterns first
-    # This prevents partial replacements (e.g., 'Ca' before 'C')
-    sorted_elements = sorted(ELEMENT_REPLACEMENTS.keys(), key=len, reverse=True)
-    
-    for element in sorted_elements:
-        result = result.replace(element, ELEMENT_REPLACEMENTS[element])
-    
-    return result
+    return _PREPROCESS_PATTERN.sub(
+        lambda m: ELEMENT_REPLACEMENTS[m.group(0)], smiles
+    )
 
 
 def normalize_ring_numbers(smiles: str) -> str:
@@ -169,6 +251,76 @@ def normalize_ring_numbers(smiles: str) -> str:
     'C0CC0CCCCC0C0'
     """
     return re.sub(r'[0-9]', '0', smiles)
+
+
+def canonicalize_smiles(smiles: str) -> str:
+    """
+    Return the canonical SMILES for a molecule using RDKit.
+
+    Ensures that two different SMILES strings representing the same molecule
+    (e.g. "CCO" and "OCC") produce identical strings before any string-based
+    comparison.  Falls back to the original string when RDKit is unavailable
+    or the SMILES cannot be parsed.
+
+    Parameters
+    ----------
+    smiles : str
+        Input SMILES string
+
+    Returns
+    -------
+    str
+        Canonical SMILES, or the original string if canonicalization fails
+    """
+    if not smiles or not RDKIT_AVAILABLE:
+        return smiles
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return smiles
+        return Chem.MolToSmiles(mol)
+    except Exception:
+        return smiles
+
+
+def smiles_to_inchi(smiles: str) -> str:
+    """
+    Convert a SMILES string to an InChI string, stripping the leading
+    'InChI=' prefix so downstream string-similarity methods operate on
+    the information-bearing part only.
+
+    Requires RDKit.  Returns an empty string when conversion fails or
+    RDKit is unavailable.
+
+    Parameters
+    ----------
+    smiles : str
+        Input SMILES string
+
+    Returns
+    -------
+    str
+        InChI string with 'InChI=' prefix removed, or '' on failure
+
+    Examples
+    --------
+    >>> smiles_to_inchi("CCO")
+    '1S/C2H6O/c1-2-3/h3H,2H2,1H3'
+    """
+    if not smiles or not RDKIT_AVAILABLE:
+        return ''
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return ''
+        inchi = MolToInchi(mol)
+        if inchi is None:
+            return ''
+        if inchi.startswith('InChI='):
+            inchi = inchi[6:]
+        return inchi
+    except Exception:
+        return ''
 
 
 # ============================================================================
@@ -847,6 +999,282 @@ def lingo_tfidf_similarity(smiles1: str, smiles2: str, q: int = 4,
 
 
 # ============================================================================
+# 9. SMILES TF-IDF Cosine Similarity (chemical tokenization)
+# ============================================================================
+
+class SMILESTokenizer:
+    """
+    Chemically-aware SMILES tokenizer for use with sklearn TF-IDF.
+
+    Recognises multi-character elements (Cl, Br, Si, …) and stereochemistry
+    markers (@@, @) as single tokens so that TF-IDF operates on chemical
+    units rather than raw characters.
+    """
+
+    # Ordered longest-first so that '@@' beats '@', '@TH1' beats '@', etc.
+    _PATTERNS = sorted([
+        '@@',
+        'Br', 'Cl',
+        'Si', 'Se', 'se', 'As', 'as', 'Te', 'te',
+        'Na', 'Ca', 'Mg', 'Fe', 'Zn', 'Cu', 'Mn', 'Co', 'Ni',
+        'Al', 'Li', 'Ag', 'Au', 'Pt', 'Pd', 'Cr', 'Ti', 'Sn',
+        'Pb', 'Hg', 'Cd', 'Ba', 'Sr', 'Bi', 'Sb', 'Ge', 'Ga',
+        'In', 'Tl', 'Be', 'Ra', 'Ru', 'Rh', 'Os', 'Ir', 'Mo',
+        'Nb', 'Ta', 'Re', 'Tc',
+        'La', 'Ce', 'Pr', 'Nd', 'Sm', 'Eu', 'Gd', 'Tb',
+        'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu',
+    ], key=len, reverse=True)
+
+    _TOKEN_RE = re.compile('|'.join(re.escape(p) for p in _PATTERNS) + '|.')
+
+    def tokenize(self, smiles: str) -> List[str]:
+        """Split a SMILES string into chemical tokens."""
+        return self._TOKEN_RE.findall(smiles)
+
+    def __call__(self, smiles: str) -> List[str]:
+        return self.tokenize(smiles)
+
+
+def smiles_tfidf_similarity(smiles1: str, smiles2: str,
+                             corpus: List[str] = None,
+                             ngram_range: Tuple[int, int] = (1, 2),
+                             vectorizer=None) -> float:
+    """
+    TF-IDF cosine similarity with chemically-aware tokenization.
+
+    Uses SMILESTokenizer so that multi-character atoms (Cl, Br, …) and
+    stereochemistry markers (@@) are treated as indivisible tokens.
+    When a pre-fitted vectorizer is supplied it is reused directly,
+    which is strongly recommended for batch/matrix calculations.
+
+    Parameters
+    ----------
+    smiles1 : str
+        First SMILES string
+    smiles2 : str
+        Second SMILES string
+    corpus : List[str]
+        Corpus used to fit the IDF weights.  Defaults to [smiles1, smiles2].
+    ngram_range : Tuple[int, int]
+        N-gram range passed to TfidfVectorizer (default (1, 2)).
+    vectorizer : fitted TfidfVectorizer or None
+        Pre-fitted vectorizer for efficiency in batch use.
+
+    Returns
+    -------
+    float
+        Cosine similarity in [0, 1]
+    """
+    if not SKLEARN_AVAILABLE:
+        raise ImportError("sklearn is required for smiles_tfidf_similarity")
+
+    if vectorizer is None:
+        if corpus is None:
+            corpus = [smiles1, smiles2]
+        tokenizer = SMILESTokenizer()
+        vectorizer = TfidfVectorizer(
+            tokenizer=tokenizer,
+            analyzer='word',
+            lowercase=False,
+            token_pattern=None,
+            ngram_range=ngram_range,
+            min_df=1,
+            sublinear_tf=True,
+        )
+        vectorizer.fit(corpus)
+
+    vec1 = vectorizer.transform([smiles1])
+    vec2 = vectorizer.transform([smiles2])
+    return float(sklearn_cosine_similarity(vec1, vec2)[0, 0])
+
+
+# ============================================================================
+# 10. Jellyfish-based string similarity metrics
+# ============================================================================
+
+def damerau_levenshtein_similarity(smiles1: str, smiles2: str,
+                                    preprocess: bool = True) -> float:
+    """
+    Damerau-Levenshtein similarity (transpositions count as one edit).
+
+    Like edit_similarity but also treats adjacent-character transpositions
+    as a single operation, which can better capture SMILES typos/variants.
+    Requires the ``jellyfish`` package.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+        SMILES strings to compare
+    preprocess : bool
+        Replace multi-character atoms before comparison
+
+    Returns
+    -------
+    float
+        Similarity in [0, 1]
+    """
+    if not JELLYFISH_AVAILABLE:
+        raise ImportError("jellyfish is required for damerau_levenshtein_similarity")
+    if preprocess:
+        smiles1 = preprocess_smiles(smiles1)
+        smiles2 = preprocess_smiles(smiles2)
+    max_len = max(len(smiles1), len(smiles2))
+    if max_len == 0:
+        return 1.0
+    return 1.0 - jellyfish.damerau_levenshtein_distance(smiles1, smiles2) / max_len
+
+
+def jaro_similarity(smiles1: str, smiles2: str,
+                    preprocess: bool = True) -> float:
+    """
+    Jaro similarity between two SMILES strings.
+
+    Particularly sensitive to common characters and transpositions;
+    less meaningful for long strings.  Requires ``jellyfish``.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+    preprocess : bool
+
+    Returns
+    -------
+    float
+        Similarity in [0, 1]
+    """
+    if not JELLYFISH_AVAILABLE:
+        raise ImportError("jellyfish is required for jaro_similarity")
+    if preprocess:
+        smiles1 = preprocess_smiles(smiles1)
+        smiles2 = preprocess_smiles(smiles2)
+    return jellyfish.jaro_similarity(smiles1, smiles2)
+
+
+def jaro_winkler_similarity(smiles1: str, smiles2: str,
+                             preprocess: bool = True) -> float:
+    """
+    Jaro-Winkler similarity — Jaro with extra weight for common prefixes.
+
+    Can capture cases where two SMILES share a common scaffold prefix.
+    Requires ``jellyfish``.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+    preprocess : bool
+
+    Returns
+    -------
+    float
+        Similarity in [0, 1]
+    """
+    if not JELLYFISH_AVAILABLE:
+        raise ImportError("jellyfish is required for jaro_winkler_similarity")
+    if preprocess:
+        smiles1 = preprocess_smiles(smiles1)
+        smiles2 = preprocess_smiles(smiles2)
+    return jellyfish.jaro_winkler_similarity(smiles1, smiles2)
+
+
+def hamming_similarity(smiles1: str, smiles2: str,
+                       preprocess: bool = True) -> float:
+    """
+    Hamming similarity between two SMILES strings.
+
+    Strings are right-padded with spaces to equal length before comparison.
+    Requires ``jellyfish``.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+    preprocess : bool
+
+    Returns
+    -------
+    float
+        Similarity in [0, 1]
+    """
+    if not JELLYFISH_AVAILABLE:
+        raise ImportError("jellyfish is required for hamming_similarity")
+    if preprocess:
+        smiles1 = preprocess_smiles(smiles1)
+        smiles2 = preprocess_smiles(smiles2)
+    max_len = max(len(smiles1), len(smiles2))
+    if max_len == 0:
+        return 1.0
+    s1 = smiles1.ljust(max_len)
+    s2 = smiles2.ljust(max_len)
+    try:
+        return 1.0 - jellyfish.hamming_distance(s1, s2) / max_len
+    except Exception:
+        return 0.0
+
+
+# ============================================================================
+# 11. Normalized Compression Distance (NCD) similarity
+# ============================================================================
+
+def _compress_bytes(data: bytes, compresslevel: int = 9) -> int:
+    """Return compressed size of *data* using gzip with mtime=0 (deterministic)."""
+    import gzip as _gzip
+    import io as _io
+    buf = _io.BytesIO()
+    with _gzip.GzipFile(fileobj=buf, mode='wb', compresslevel=compresslevel, mtime=0) as f:
+        f.write(data)
+    return len(buf.getvalue())
+
+
+def ncd_similarity(smiles1: str, smiles2: str,
+                   preprocess: bool = True) -> float:
+    """
+    Normalized Compression Distance (NCD) similarity using gzip.
+
+    NCD(x,y) = (C(x|y) - min(C(x), C(y))) / max(C(x), C(y))
+    similarity = 1 - NCD, clamped to [0, 1].
+
+    Both concatenation orders (x|y and y|x) are tried; the minimum
+    compressed size is used for robustness.  A '|' separator (not valid
+    in SMILES) is inserted between the two strings.
+
+    This is a universal, parameter-free metric — but it is semantically
+    unaware of chemistry.  It works best for detecting near-duplicate
+    SMILES and for comparison benchmarks.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+        SMILES strings (or InChI strings) to compare
+    preprocess : bool
+        Replace multi-character atoms before comparison (recommended for SMILES)
+
+    Returns
+    -------
+    float
+        Similarity in [0, 1]
+    """
+    if not smiles1 or not smiles2:
+        return 0.0
+    if smiles1 == smiles2:
+        return 1.0
+    if preprocess:
+        smiles1 = preprocess_smiles(smiles1)
+        smiles2 = preprocess_smiles(smiles2)
+    a = smiles1.encode('utf-8')
+    b = smiles2.encode('utf-8')
+    sep = b'|'
+    c_a = _compress_bytes(a)
+    c_b = _compress_bytes(b)
+    c_ab = _compress_bytes(a + sep + b)
+    c_ba = _compress_bytes(b + sep + a)
+    c_xy = min(c_ab, c_ba)
+    denominator = max(c_a, c_b)
+    if denominator == 0:
+        return 1.0
+    ncd = (c_xy - min(c_a, c_b)) / denominator
+    return max(0.0, min(1.0, 1.0 - ncd))
+
+
+# ============================================================================
 # Available Methods Registry
 # ============================================================================
 
@@ -908,6 +1336,47 @@ AVAILABLE_METHODS = {
         'description': 'LINGO similarity (q=5)',
         'params': {'q': 5}
     },
+    'smiles_tfidf': {
+        'function': smiles_tfidf_similarity,
+        'description': 'TF-IDF cosine similarity with chemical tokenization (ngram (1,2))',
+        'params': {'ngram_range': (1, 2)},
+        'requires': 'sklearn',
+    },
+    'smiles_tfidf13': {
+        'function': lambda s1, s2: smiles_tfidf_similarity(s1, s2, ngram_range=(1, 3)),
+        'description': 'TF-IDF cosine similarity with chemical tokenization (ngram (1,3))',
+        'params': {'ngram_range': (1, 3)},
+        'requires': 'sklearn',
+    },
+    'damerau_levenshtein': {
+        'function': damerau_levenshtein_similarity,
+        'description': 'Damerau-Levenshtein similarity (transpositions as 1 edit)',
+        'params': {},
+        'requires': 'jellyfish',
+    },
+    'jaro': {
+        'function': jaro_similarity,
+        'description': 'Jaro similarity',
+        'params': {},
+        'requires': 'jellyfish',
+    },
+    'jaro_winkler': {
+        'function': jaro_winkler_similarity,
+        'description': 'Jaro-Winkler similarity (prefix-weighted Jaro)',
+        'params': {},
+        'requires': 'jellyfish',
+    },
+    'hamming': {
+        'function': hamming_similarity,
+        'description': 'Hamming similarity (shorter string padded with spaces)',
+        'params': {},
+        'requires': 'jellyfish',
+    },
+    'ncd': {
+        'function': ncd_similarity,
+        'description': 'Normalized Compression Distance similarity (gzip, universal/parameter-free)',
+        'params': {},
+    },
 }
 
 
@@ -931,11 +1400,14 @@ def get_similarity_function(method: str) -> Callable:
     method_info = AVAILABLE_METHODS[method]
     
     if 'requires' in method_info:
-        if method_info['requires'] == 'scipy' and not SCIPY_AVAILABLE:
+        req = method_info['requires']
+        if req == 'scipy' and not SCIPY_AVAILABLE:
             raise ImportError(f"Method '{method}' requires scipy")
-        if method_info['requires'] == 'sklearn' and not SKLEARN_AVAILABLE:
-            raise ImportError(f"Method '{method}' requires sklearn")
-    
+        if req == 'sklearn' and not SKLEARN_AVAILABLE:
+            raise ImportError(f"Method '{method}' requires scikit-learn")
+        if req == 'jellyfish' and not JELLYFISH_AVAILABLE:
+            raise ImportError(f"Method '{method}' requires jellyfish")
+
     return method_info['function']
 
 
@@ -1404,10 +1876,19 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
     
     parser.add_argument('--list-methods', action='store_true',
                         help='List available similarity methods and exit')
-    
+
+    parser.add_argument('--canonicalize', action='store_true',
+                        help='Canonicalize SMILES with RDKit before comparison (requires rdkit). '
+                             'Ensures "CCO" and "OCC" are treated as the same molecule.')
+
+    parser.add_argument('--inchi', action='store_true',
+                        help='Convert SMILES to InChI (stripping the "InChI=" prefix) before '
+                             'comparison (requires rdkit). Useful for representation-independent '
+                             'similarity; implies --canonicalize.')
+
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Print progress information')
-    
+
     return parser.parse_args()
 
 
@@ -1505,7 +1986,26 @@ def main():
     template_smiles = [templates[n] for n in template_names]
     library_names = list(library.keys())
     library_smiles = [library[n] for n in library_names]
-    
+
+    # Optional SMILES canonicalization / InChI conversion
+    if args.inchi or args.canonicalize:
+        if not RDKIT_AVAILABLE:
+            print("Warning: --canonicalize/--inchi requested but RDKit is not installed. "
+                  "Install with: pip install rdkit", file=sys.stderr)
+        else:
+            if args.inchi:
+                if args.verbose:
+                    print("Converting SMILES to InChI (stripping 'InChI=' prefix)...")
+                def _transform(s):
+                    return smiles_to_inchi(s) or s
+            else:
+                if args.verbose:
+                    print("Canonicalizing SMILES with RDKit...")
+                def _transform(s):
+                    return canonicalize_smiles(s)
+            template_smiles = [_transform(s) for s in template_smiles]
+            library_smiles  = [_transform(s) for s in library_smiles]
+
     # Determine which methods to use
     if args.all_methods:
         methods_to_run = list(AVAILABLE_METHODS.keys())
