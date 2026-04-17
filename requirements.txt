@@ -1,0 +1,15 @@
+# Core (required)
+numpy>=1.25
+pandas>=2.0
+
+# Optional: SMIfp City Block Distance method
+scipy>=1.9
+
+# Optional: LINGO TF-IDF and SMILES TF-IDF methods
+scikit-learn>=1.0
+
+# Optional: SMILES canonicalization and InChI conversion (--canonicalize, --inchi)
+rdkit>=2022.03
+
+# Optional: Damerau-Levenshtein, Jaro, Jaro-Winkler, Hamming methods
+jellyfish>=1.0
