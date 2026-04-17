@@ -5,13 +5,13 @@ SMILES-based Similarity Kernels
 Python implementation of SMILES-based compound similarity functions
 as described in:
 
-Öztürk, H., Ozkirimli, E., & Özgür, A. (2016). A comparative study of 
-SMILES-based compound similarity functions for drug-target interaction 
+Öztürk, H., Ozkirimli, E., & Özgür, A. (2016). A comparative study of
+SMILES-based compound similarity functions for drug-target interaction
 prediction. BMC Bioinformatics, 17, 128.
 
 Original Java implementation: https://github.com/hkmztrk/SMILESbasedSimilarityKernels
 
-WARNING: The original implementation may contain inconsistencies with the manuscript. 
+WARNING: The original implementation may contain inconsistencies with the manuscript.
 This implementation aims to correct those issues. See README.md for details.
 
 This module can be:
@@ -42,6 +42,7 @@ from pathlib import Path
 try:
     from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
     from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine_similarity
+
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
@@ -49,6 +50,7 @@ except ImportError:
 # Optional import for City Block Distance
 try:
     from scipy.spatial.distance import cityblock
+
     SCIPY_AVAILABLE = True
 except ImportError:
     SCIPY_AVAILABLE = False
@@ -56,10 +58,11 @@ except ImportError:
 # Optional import for RDKit (SMILES canonicalization and InChI conversion)
 try:
     from rdkit import Chem
+
     try:
-        from rdkit.Chem.inchi import MolToInchi          # RDKit >= 2020
+        from rdkit.Chem.inchi import MolToInchi  # RDKit >= 2020
     except ImportError:
-        from rdkit.Chem.rdinchi import MolToInchi        # older RDKit
+        from rdkit.Chem.rdinchi import MolToInchi  # older RDKit
     RDKIT_AVAILABLE = True
 except ImportError:
     RDKIT_AVAILABLE = False
@@ -67,6 +70,7 @@ except ImportError:
 # Optional import for jellyfish (Damerau-Levenshtein, Jaro, Jaro-Winkler, Hamming)
 try:
     import jellyfish
+
     JELLYFISH_AVAILABLE = True
 except ImportError:
     JELLYFISH_AVAILABLE = False
@@ -83,97 +87,91 @@ except ImportError:
 # prefixes — the regex-based preprocess_smiles handles this automatically.
 ELEMENT_REPLACEMENTS = {
     # --- Stereochemistry (must precede bare '@') ---
-    '@@': '¡',      # counterclockwise chirality
-    '@TH1': '¢',
-    '@TH2': '£',
-    '@AL1': '¤',
-    '@AL2': '¥',
-    '@SP1': '¦',
-    '@SP2': '§',
-    '@SP3': '¨',
-    '@TB': '©',     # trigonal bipyramidal (followed by digits)
-    '@OH': 'ª',     # octahedral (followed by digits)
-
+    "@@": "¡",  # counterclockwise chirality
+    "@TH1": "¢",
+    "@TH2": "£",
+    "@AL1": "¤",
+    "@AL2": "¥",
+    "@SP1": "¦",
+    "@SP2": "§",
+    "@SP3": "¨",
+    "@TB": "©",  # trigonal bipyramidal (followed by digits)
+    "@OH": "ª",  # octahedral (followed by digits)
     # --- Halogens ---
-    'Cl': 'L',
-    'Br': 'R',
-
+    "Cl": "L",
+    "Br": "R",
     # --- Metalloids and chalcogens ---
-    'Si': 'G',
-    'Se': 'E',
-    'se': 'e',      # aromatic selenium
-    'As': 'D',
-    'as': 'd',      # aromatic arsenic
-    'Te': 'T',
-    'te': 't',      # aromatic tellurium
-    'Ge': '«',
-    'Ga': '¬',
-
+    "Si": "G",
+    "Se": "E",
+    "se": "e",  # aromatic selenium
+    "As": "D",
+    "as": "d",  # aromatic arsenic
+    "Te": "T",
+    "te": "t",  # aromatic tellurium
+    "Ge": "«",
+    "Ga": "¬",
     # --- Common metals ---
-    'Na': 'Y',
-    'Ca': 'Ω',
-    'Mg': 'M',
-    'Fe': 'X',
-    'Zn': 'Z',
-    'Cu': 'Q',
-    'Mn': 'J',
-    'Co': 'K',
-    'Ni': 'Θ',
-    'Al': 'A',
-    'Li': 'Λ',
-    'Ag': '!',
-    'Au': '$',
-    'Pt': '&',
-    'Pd': '^',
-    'Cr': '~',
-    'Ti': '`',
-    'Sn': ';',
-    'Pb': ':',
-    'Hg': '?',
-    'Cd': '<',
-    'Ba': '>',
-    'Sr': '{',
-    'Bi': '}',
-    'Sb': '|',
-
+    "Na": "Y",
+    "Ca": "Ω",
+    "Mg": "M",
+    "Fe": "X",
+    "Zn": "Z",
+    "Cu": "Q",
+    "Mn": "J",
+    "Co": "K",
+    "Ni": "Θ",
+    "Al": "A",
+    "Li": "Λ",
+    "Ag": "!",
+    "Au": "$",
+    "Pt": "&",
+    "Pd": "^",
+    "Cr": "~",
+    "Ti": "`",
+    "Sn": ";",
+    "Pb": ":",
+    "Hg": "?",
+    "Cd": "<",
+    "Ba": ">",
+    "Sr": "{",
+    "Bi": "}",
+    "Sb": "|",
     # --- Extended / rare metals ---
-    'In': '®',
-    'Tl': '¯',
-    'Be': '°',
-    'Ra': '±',
-    'Ru': '²',
-    'Rh': '³',
-    'Os': '´',
-    'Ir': 'µ',
-    'Mo': '¶',
-    'Nb': '¹',
-    'Ta': 'º',
-    'Re': '»',
-    'Tc': '¼',
-
+    "In": "®",
+    "Tl": "¯",
+    "Be": "°",
+    "Ra": "±",
+    "Ru": "²",
+    "Rh": "³",
+    "Os": "´",
+    "Ir": "µ",
+    "Mo": "¶",
+    "Nb": "¹",
+    "Ta": "º",
+    "Re": "»",
+    "Tc": "¼",
     # Single-character element symbols that would otherwise be confused
     # with SMILES atom tokens if left unencoded when they appear inside
     # bracket atoms (e.g. [W], [V], [U]).  We encode them here so that
     # downstream string-similarity methods treat them as atomic units.
-    'W': '·',       # Tungsten
-    'V': '¸',       # Vanadium
-    'U': 'Ë',       # Uranium
-
+    "W": "·",  # Tungsten
+    "V": "¸",  # Vanadium
+    "U": "Ë",  # Uranium
     # --- Lanthanides / actinides ---
-    'La': '½',
-    'Ce': '¾',
-    'Pr': '¿',
-    'Nd': 'À',
-    'Sm': 'Á',
-    'Eu': 'Â',
-    'Gd': 'Ã',
-    'Tb': 'Ä',
-    'Dy': 'Å',
-    'Ho': 'Æ',
-    'Er': 'Ç',
-    'Tm': 'È',
-    'Yb': 'É',
-    'Lu': 'Ê',
+    "La": "½",
+    "Ce": "¾",
+    "Pr": "¿",
+    "Nd": "À",
+    "Sm": "Á",
+    "Eu": "Â",
+    "Gd": "Ã",
+    "Tb": "Ä",
+    "Dy": "Å",
+    "Ho": "Æ",
+    "Er": "Ç",
+    "Tm": "È",
+    "Yb": "É",
+    "Lu": "Ê",
 }
 
 # Reverse mapping for decoding (if needed) - not needed, indeed, but may be useful.
@@ -183,12 +181,7 @@ ELEMENT_REVERSE = {v: k for k, v in ELEMENT_REPLACEMENTS.items()}
 # Keys are sorted longest-first so that longer patterns (e.g. '@@', '@TH1')
 # are always matched before shorter prefixes (e.g. '@'), avoiding partial
 # replacements that sequential str.replace() calls would produce.
-_PREPROCESS_PATTERN = re.compile(
-    '|'.join(
-        re.escape(k)
-        for k in sorted(ELEMENT_REPLACEMENTS.keys(), key=len, reverse=True)
-    )
-)
+_PREPROCESS_PATTERN = re.compile("|".join(re.escape(k) for k in sorted(ELEMENT_REPLACEMENTS.keys(), key=len, reverse=True)))
 
 
 def preprocess_smiles(smiles: str) -> str:
@@ -220,29 +213,27 @@ def preprocess_smiles(smiles: str) -> str:
     >>> preprocess_smiles("C[C@@H](Cl)Br")
     'C[C¡H](L)R'
     """
-    return _PREPROCESS_PATTERN.sub(
-        lambda m: ELEMENT_REPLACEMENTS[m.group(0)], smiles
-    )
+    return _PREPROCESS_PATTERN.sub(lambda m: ELEMENT_REPLACEMENTS[m.group(0)], smiles)
 
 
 def normalize_ring_numbers(smiles: str) -> str:
     """
     Normalize ring numbers in SMILES string by replacing all digits with '0'.
-    
+
     As specified in Ã–ztÃ¼rk et al. (2016) for LINGO method:
-    "Before the LINGO creation process, all ring numbers in the SMILES 
+    "Before the LINGO creation process, all ring numbers in the SMILES
     string are set to '0'."
-    
+
     Parameters
     ----------
     smiles : str
         Input SMILES string
-        
+
     Returns
     -------
     str
         SMILES with all ring numbers normalized to '0'
-        
+
     Examples
     --------
     >>> normalize_ring_numbers("c1ccccc1")
@@ -250,7 +241,7 @@ def normalize_ring_numbers(smiles: str) -> str:
     >>> normalize_ring_numbers("C1CC2CCCCC2C1")
     'C0CC0CCCCC0C0'
     """
-    return re.sub(r'[0-9]', '0', smiles)
+    return re.sub(r"[0-9]", "0", smiles)
 
 
 def canonicalize_smiles(smiles: str) -> str:
@@ -308,73 +299,70 @@ def smiles_to_inchi(smiles: str) -> str:
     '1S/C2H6O/c1-2-3/h3H,2H2,1H3'
     """
     if not smiles or not RDKIT_AVAILABLE:
-        return ''
+        return ""
     try:
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            return ''
+            return ""
         inchi = MolToInchi(mol)
         if inchi is None:
-            return ''
-        if inchi.startswith('InChI='):
+            return ""
+        if inchi.startswith("InChI="):
             inchi = inchi[6:]
         return inchi
     except Exception:
-        return ''
+        return ""
 
 
 # ============================================================================
 # 1. Edit Distance Similarity
 # ============================================================================
 
+
 def edit_distance(s1: str, s2: str) -> int:
     """
     Calculate Levenshtein edit distance between two strings.
-    
+
     Parameters
     ----------
     s1 : str
         First string
     s2 : str
         Second string
-        
+
     Returns
     -------
     int
         Number of edit operations (insert, delete, substitute)
     """
     m, n = len(s1), len(s2)
-    
+
     # Create distance matrix
     dp = [[0] * (n + 1) for _ in range(m + 1)]
-    
+
     # Initialize base cases
     for i in range(m + 1):
         dp[i][0] = i
     for j in range(n + 1):
         dp[0][j] = j
-    
+
     # Fill the matrix
     for i in range(1, m + 1):
         for j in range(1, n + 1):
             if s1[i - 1] == s2[j - 1]:
                 dp[i][j] = dp[i - 1][j - 1]
             else:
-                dp[i][j] = 1 + min(
-                    dp[i - 1][j],      # deletion
-                    dp[i][j - 1],      # insertion
-                    dp[i - 1][j - 1]   # substitution
-                )
-    
+                dp[i][j] = 1 + min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])  # deletion  # insertion  # substitution
+
     return dp[m][n]
 
 
 def edit_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float:
     """
     Calculate edit distance-based similarity between two SMILES strings.
-    
+
     EditSim(S1, S2) = 1 - edit(S1, S2) / max(len(S1), len(S2))
-    
+
     Parameters
     ----------
     smiles1 : str
@@ -383,7 +371,7 @@ def edit_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> floa
         Second SMILES string
     preprocess : bool
         Whether to preprocess SMILES (replace multi-char atoms)
-        
+
     Returns
     -------
     float
@@ -392,13 +380,13 @@ def edit_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> floa
     if preprocess:
         smiles1 = preprocess_smiles(smiles1)
         smiles2 = preprocess_smiles(smiles2)
-    
+
     if len(smiles1) == 0 and len(smiles2) == 0:
         return 1.0
-    
+
     ed = edit_distance(smiles1, smiles2)
     max_len = max(len(smiles1), len(smiles2))
-    
+
     return 1.0 - (ed / max_len)
 
 
@@ -406,17 +394,18 @@ def edit_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> floa
 # 2. Normalized Longest Common Subsequence (NLCS)
 # ============================================================================
 
+
 def lcs_length(s1: str, s2: str) -> int:
     """
     Calculate length of longest common subsequence.
-    
+
     Parameters
     ----------
     s1 : str
         First string
     s2 : str
         Second string
-        
+
     Returns
     -------
     int
@@ -424,23 +413,23 @@ def lcs_length(s1: str, s2: str) -> int:
     """
     m, n = len(s1), len(s2)
     dp = [[0] * (n + 1) for _ in range(m + 1)]
-    
+
     for i in range(1, m + 1):
         for j in range(1, n + 1):
             if s1[i - 1] == s2[j - 1]:
                 dp[i][j] = dp[i - 1][j - 1] + 1
             else:
                 dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
-    
+
     return dp[m][n]
 
 
 def nlcs_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float:
     """
     Calculate Normalized Longest Common Subsequence similarity.
-    
+
     NLCS(S1, S2) = LCS(S1, S2)^2 / (len(S1) * len(S2))
-    
+
     Parameters
     ----------
     smiles1 : str
@@ -449,7 +438,7 @@ def nlcs_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> floa
         Second SMILES string
     preprocess : bool
         Whether to preprocess SMILES
-        
+
     Returns
     -------
     float
@@ -458,18 +447,19 @@ def nlcs_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> floa
     if preprocess:
         smiles1 = preprocess_smiles(smiles1)
         smiles2 = preprocess_smiles(smiles2)
-    
+
     if len(smiles1) == 0 or len(smiles2) == 0:
         return 0.0 if len(smiles1) != len(smiles2) else 1.0
-    
+
     lcs_len = lcs_length(smiles1, smiles2)
-    
-    return (lcs_len ** 2) / (len(smiles1) * len(smiles2))
+
+    return (lcs_len**2) / (len(smiles1) * len(smiles2))
 
 
 # ============================================================================
 # 3. Combined LCS Models (CLCS)
 # ============================================================================
+
 
 def mclcs1_length(s1: str, s2: str) -> int:
     """
@@ -478,13 +468,13 @@ def mclcs1_length(s1: str, s2: str) -> int:
     """
     min_len = min(len(s1), len(s2))
     length = 0
-    
+
     for i in range(min_len):
         if s1[i] == s2[i]:
             length += 1
         else:
             break
-    
+
     return length
 
 
@@ -496,28 +486,26 @@ def mclcsn_length(s1: str, s2: str) -> int:
     m, n = len(s1), len(s2)
     if m == 0 or n == 0:
         return 0
-    
+
     # Dynamic programming for longest common substring
     dp = [[0] * (n + 1) for _ in range(m + 1)]
     max_length = 0
-    
+
     for i in range(1, m + 1):
         for j in range(1, n + 1):
             if s1[i - 1] == s2[j - 1]:
                 dp[i][j] = dp[i - 1][j - 1] + 1
                 max_length = max(max_length, dp[i][j])
-    
+
     return max_length
 
 
-def clcs_similarity(smiles1: str, smiles2: str, 
-                    w1: float = 0.33, w2: float = 0.33, w3: float = 0.34,
-                    preprocess: bool = True) -> float:
+def clcs_similarity(smiles1: str, smiles2: str, w1: float = 0.33, w2: float = 0.33, w3: float = 0.34, preprocess: bool = True) -> float:
     """
     Combined LCS similarity - weighted combination of NLCS, NMCLCS1, NMCLCSn.
-    
+
     K(S1, S2) = w1*NLCS + w2*NMCLCS1 + w3*NMCLCSn
-    
+
     Parameters
     ----------
     smiles1 : str
@@ -528,7 +516,7 @@ def clcs_similarity(smiles1: str, smiles2: str,
         Weights for each component (should sum to 1)
     preprocess : bool
         Whether to preprocess SMILES
-        
+
     Returns
     -------
     float
@@ -537,24 +525,24 @@ def clcs_similarity(smiles1: str, smiles2: str,
     if preprocess:
         smiles1 = preprocess_smiles(smiles1)
         smiles2 = preprocess_smiles(smiles2)
-    
+
     if len(smiles1) == 0 or len(smiles2) == 0:
         return 0.0 if len(smiles1) != len(smiles2) else 1.0
-    
+
     denominator = len(smiles1) * len(smiles2)
-    
+
     # NLCS
     lcs_len = lcs_length(smiles1, smiles2)
-    v1 = (lcs_len ** 2) / denominator
-    
+    v1 = (lcs_len**2) / denominator
+
     # NMCLCS1
     mclcs1_len = mclcs1_length(smiles1, smiles2)
-    v2 = (mclcs1_len ** 2) / denominator
-    
+    v2 = (mclcs1_len**2) / denominator
+
     # NMCLCSn
     mclcsn_len = mclcsn_length(smiles1, smiles2)
-    v3 = (mclcsn_len ** 2) / denominator
-    
+    v3 = (mclcsn_len**2) / denominator
+
     return w1 * v1 + w2 * v2 + w3 * v3
 
 
@@ -562,17 +550,18 @@ def clcs_similarity(smiles1: str, smiles2: str,
 # 4. SMILES-based Substring Kernel
 # ============================================================================
 
+
 def get_all_substrings(s: str, min_length: int = 2) -> Counter:
     """
     Get frequency counts of all substrings with length >= min_length.
-    
+
     Parameters
     ----------
     s : str
         Input string
     min_length : int
         Minimum substring length
-        
+
     Returns
     -------
     Counter
@@ -580,24 +569,21 @@ def get_all_substrings(s: str, min_length: int = 2) -> Counter:
     """
     substrings = Counter()
     n = len(s)
-    
+
     for i in range(n):
         for j in range(i + min_length, n + 1):
             substrings[s[i:j]] += 1
-    
+
     return substrings
 
 
-def substring_kernel_similarity(smiles1: str, smiles2: str, 
-                                 min_length: int = 2,
-                                 normalized: bool = True,
-                                 preprocess: bool = True) -> float:
+def substring_kernel_similarity(smiles1: str, smiles2: str, min_length: int = 2, normalized: bool = True, preprocess: bool = True) -> float:
     """
     SMILES representation-based string kernel.
-    
+
     Calculates inner product of substring frequency vectors.
     K(S1, S2) = <Î¸(S1), Î¸(S2)>
-    
+
     Parameters
     ----------
     smiles1 : str
@@ -610,7 +596,7 @@ def substring_kernel_similarity(smiles1: str, smiles2: str,
         If True, normalize by self-similarities
     preprocess : bool
         Whether to preprocess SMILES
-        
+
     Returns
     -------
     float
@@ -619,24 +605,24 @@ def substring_kernel_similarity(smiles1: str, smiles2: str,
     if preprocess:
         smiles1 = preprocess_smiles(smiles1)
         smiles2 = preprocess_smiles(smiles2)
-    
+
     freq1 = get_all_substrings(smiles1, min_length)
     freq2 = get_all_substrings(smiles2, min_length)
-    
+
     # Inner product
     common_substrings = set(freq1.keys()) & set(freq2.keys())
     k12 = sum(freq1[s] * freq2[s] for s in common_substrings)
-    
+
     if not normalized:
         return float(k12)
-    
+
     # Normalized version
     k11 = sum(v * v for v in freq1.values())
     k22 = sum(v * v for v in freq2.values())
-    
+
     if k11 == 0 or k22 == 0:
         return 0.0
-    
+
     return k12 / np.sqrt(k11 * k22)
 
 
@@ -646,29 +632,59 @@ def substring_kernel_similarity(smiles1: str, smiles2: str,
 
 # Original 34 characters from SMIfp paper
 SMIFP_CHARS_34 = [
-    'C', 'c', 'O', 'o', 'N', 'n', 'S', 's', 'P', 'p',
-    'F', 'I', 'B', 'b', 
-    '1', '2', '3', '4', '5', '6', '7', '8', '9',
-    '(', ')', '[', ']', '=', '#', '+', '-', '@', '%', '.'
+    "C",
+    "c",
+    "O",
+    "o",
+    "N",
+    "n",
+    "S",
+    "s",
+    "P",
+    "p",
+    "F",
+    "I",
+    "B",
+    "b",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "(",
+    ")",
+    "[",
+    "]",
+    "=",
+    "#",
+    "+",
+    "-",
+    "@",
+    "%",
+    ".",
 ]
 
 # Extended 38 characters (adding chirality and directional bonds)
 SMIFP_CHARS_38 = SMIFP_CHARS_34.copy()
-SMIFP_CHARS_38.remove('%')  # Remove '%' as it's rare
-SMIFP_CHARS_38.extend(['/', '\\', '@@'])
+SMIFP_CHARS_38.remove("%")  # Remove '%' as it's rare
+SMIFP_CHARS_38.extend(["/", "\\", "@@"])
 
 
 def smiles_to_fingerprint(smiles: str, chars: List[str] = None) -> np.ndarray:
     """
     Convert SMILES to fingerprint vector based on character frequencies.
-    
+
     Parameters
     ----------
     smiles : str
         SMILES string
     chars : List[str]
         List of characters to count (default: 34D SMIfp)
-        
+
     Returns
     -------
     np.ndarray
@@ -676,23 +692,21 @@ def smiles_to_fingerprint(smiles: str, chars: List[str] = None) -> np.ndarray:
     """
     if chars is None:
         chars = SMIFP_CHARS_34
-    
+
     fp = np.zeros(len(chars), dtype=float)
-    
+
     for i, char in enumerate(chars):
         fp[i] = smiles.count(char)
-    
+
     return fp
 
 
-def smifp_similarity_cityblock(smiles1: str, smiles2: str, 
-                                chars: List[str] = None,
-                                preprocess: bool = True) -> float:
+def smifp_similarity_cityblock(smiles1: str, smiles2: str, chars: List[str] = None, preprocess: bool = True) -> float:
     """
     SMIfp similarity using City Block Distance.
-    
+
     Similarity = 1 / (1 + CBD)
-    
+
     Parameters
     ----------
     smiles1 : str
@@ -703,7 +717,7 @@ def smifp_similarity_cityblock(smiles1: str, smiles2: str,
         Character set for fingerprint
     preprocess : bool
         Whether to preprocess SMILES
-        
+
     Returns
     -------
     float
@@ -711,25 +725,23 @@ def smifp_similarity_cityblock(smiles1: str, smiles2: str,
     """
     if not SCIPY_AVAILABLE:
         raise ImportError("scipy is required for City Block Distance")
-    
+
     # Note: SMIfp typically doesn't preprocess multi-char elements
     # as it counts raw SMILES characters
     fp1 = smiles_to_fingerprint(smiles1, chars)
     fp2 = smiles_to_fingerprint(smiles2, chars)
-    
+
     cbd = cityblock(fp1, fp2)
-    
+
     return 1.0 / (1.0 + cbd)
 
 
-def smifp_similarity_tanimoto(smiles1: str, smiles2: str,
-                               chars: List[str] = None,
-                               preprocess: bool = True) -> float:
+def smifp_similarity_tanimoto(smiles1: str, smiles2: str, chars: List[str] = None, preprocess: bool = True) -> float:
     """
     SMIfp similarity using Tanimoto coefficient.
-    
+
     Tanimoto = dot(fp1, fp2) / (|fp1|^2 + |fp2|^2 - dot(fp1, fp2))
-    
+
     Parameters
     ----------
     smiles1 : str
@@ -740,7 +752,7 @@ def smifp_similarity_tanimoto(smiles1: str, smiles2: str,
         Character set for fingerprint
     preprocess : bool
         Whether to preprocess SMILES
-        
+
     Returns
     -------
     float
@@ -748,16 +760,16 @@ def smifp_similarity_tanimoto(smiles1: str, smiles2: str,
     """
     fp1 = smiles_to_fingerprint(smiles1, chars)
     fp2 = smiles_to_fingerprint(smiles2, chars)
-    
+
     dot_product = np.dot(fp1, fp2)
     norm1_sq = np.dot(fp1, fp1)
     norm2_sq = np.dot(fp2, fp2)
-    
+
     denominator = norm1_sq + norm2_sq - dot_product
-    
+
     if denominator == 0:
         return 1.0 if norm1_sq == 0 and norm2_sq == 0 else 0.0
-    
+
     return dot_product / denominator
 
 
@@ -765,11 +777,11 @@ def smifp_similarity_tanimoto(smiles1: str, smiles2: str,
 # 6. LINGO Similarity
 # ============================================================================
 
-def get_lingos(smiles: str, q: int = 4, normalize_rings: bool = True,
-               preprocess: bool = True) -> Counter:
+
+def get_lingos(smiles: str, q: int = 4, normalize_rings: bool = True, preprocess: bool = True) -> Counter:
     """
     Extract LINGOs (q-character substrings) from SMILES.
-    
+
     Parameters
     ----------
     smiles : str
@@ -780,7 +792,7 @@ def get_lingos(smiles: str, q: int = 4, normalize_rings: bool = True,
         Whether to normalize ring numbers to '0'
     preprocess : bool
         Whether to preprocess multi-char elements
-        
+
     Returns
     -------
     Counter
@@ -788,29 +800,28 @@ def get_lingos(smiles: str, q: int = 4, normalize_rings: bool = True,
     """
     if preprocess:
         smiles = preprocess_smiles(smiles)
-    
+
     if normalize_rings:
         smiles = normalize_ring_numbers(smiles)
-    
+
     lingos = Counter()
     n = len(smiles)
-    
+
     for i in range(n - q + 1):
-        lingo = smiles[i:i + q]
+        lingo = smiles[i : i + q]
         lingos[lingo] += 1
-    
+
     return lingos
 
 
-def lingo_similarity(smiles1: str, smiles2: str, q: int = 4,
-                      preprocess: bool = True) -> float:
+def lingo_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True) -> float:
     """
     LINGOsim - LINGO-based Tanimoto similarity.
-    
+
     LINGOsim = Î£(1 - |N(S1,i) - N(S2,i)| / (N(S1,i) + N(S2,i))) / m
-    
+
     where m is total number of unique LINGOs, N(S,i) is frequency of LINGO i in S.
-    
+
     Parameters
     ----------
     smiles1 : str
@@ -821,7 +832,7 @@ def lingo_similarity(smiles1: str, smiles2: str, q: int = 4,
         LINGO length
     preprocess : bool
         Whether to preprocess SMILES
-        
+
     Returns
     -------
     float
@@ -829,22 +840,22 @@ def lingo_similarity(smiles1: str, smiles2: str, q: int = 4,
     """
     lingos1 = get_lingos(smiles1, q, normalize_rings=True, preprocess=preprocess)
     lingos2 = get_lingos(smiles2, q, normalize_rings=True, preprocess=preprocess)
-    
+
     # Get all unique LINGOs
     all_lingos = set(lingos1.keys()) | set(lingos2.keys())
-    
+
     if len(all_lingos) == 0:
         return 1.0
-    
+
     similarity_sum = 0.0
-    
+
     for lingo in all_lingos:
         n1 = lingos1.get(lingo, 0)
         n2 = lingos2.get(lingo, 0)
-        
+
         if n1 + n2 > 0:
             similarity_sum += 1.0 - abs(n1 - n2) / (n1 + n2)
-    
+
     return similarity_sum / len(all_lingos)
 
 
@@ -852,19 +863,19 @@ def lingo_similarity(smiles1: str, smiles2: str, q: int = 4,
 # 7 & 8. LINGO-based TF and TF-IDF Cosine Similarity
 # ============================================================================
 
+
 class LingoVectorizer:
     """
     Vectorizer for LINGO-based TF and TF-IDF representations.
-    
+
     This class creates LINGO tokens from SMILES and builds
     TF or TF-IDF weighted vectors for similarity calculation.
     """
-    
-    def __init__(self, q: int = 4, use_idf: bool = True, 
-                 preprocess: bool = True, normalize_rings: bool = True):
+
+    def __init__(self, q: int = 4, use_idf: bool = True, preprocess: bool = True, normalize_rings: bool = True):
         """
         Initialize the vectorizer.
-        
+
         Parameters
         ----------
         q : int
@@ -882,26 +893,26 @@ class LingoVectorizer:
         self.normalize_rings = normalize_rings
         self.vectorizer = None
         self.is_fitted = False
-    
+
     def _smiles_to_lingo_string(self, smiles: str) -> str:
         """Convert SMILES to space-separated LINGO string for sklearn."""
         if self.preprocess:
             smiles = preprocess_smiles(smiles)
-        
+
         if self.normalize_rings:
             smiles = normalize_ring_numbers(smiles)
-        
+
         lingos = []
         n = len(smiles)
         for i in range(n - self.q + 1):
-            lingos.append(smiles[i:i + self.q])
-        
-        return ' '.join(lingos)
-    
+            lingos.append(smiles[i : i + self.q])
+
+        return " ".join(lingos)
+
     def fit(self, smiles_list: List[str]):
         """
         Fit the vectorizer on a corpus of SMILES strings.
-        
+
         Parameters
         ----------
         smiles_list : List[str]
@@ -909,34 +920,31 @@ class LingoVectorizer:
         """
         if not SKLEARN_AVAILABLE:
             raise ImportError("sklearn is required for TF-IDF vectorization")
-        
+
         # Convert SMILES to LINGO strings
         lingo_strings = [self._smiles_to_lingo_string(s) for s in smiles_list]
-        
+
         if self.use_idf:
             self.vectorizer = TfidfVectorizer(
-                analyzer='word',
-                token_pattern=r'[^\s]+',  # Any non-whitespace sequence
+                analyzer="word",
+                token_pattern=r"[^\s]+",  # Any non-whitespace sequence
                 sublinear_tf=True,  # Use 1 + log(tf) as in the paper
             )
         else:
-            self.vectorizer = CountVectorizer(
-                analyzer='word',
-                token_pattern=r'[^\s]+'
-            )
-        
+            self.vectorizer = CountVectorizer(analyzer="word", token_pattern=r"[^\s]+")
+
         self.vectorizer.fit(lingo_strings)
         self.is_fitted = True
-    
+
     def transform(self, smiles_list: List[str]):
         """
         Transform SMILES strings to TF or TF-IDF vectors.
-        
+
         Parameters
         ----------
         smiles_list : List[str]
             List of SMILES strings
-            
+
         Returns
         -------
         sparse matrix
@@ -944,22 +952,20 @@ class LingoVectorizer:
         """
         if not self.is_fitted:
             raise ValueError("Vectorizer must be fitted before transform")
-        
+
         lingo_strings = [self._smiles_to_lingo_string(s) for s in smiles_list]
         return self.vectorizer.transform(lingo_strings)
-    
+
     def fit_transform(self, smiles_list: List[str]):
         """Fit and transform in one step."""
         self.fit(smiles_list)
         return self.transform(smiles_list)
 
 
-def lingo_tfidf_similarity(smiles1: str, smiles2: str, q: int = 4,
-                            corpus: List[str] = None,
-                            vectorizer: LingoVectorizer = None) -> float:
+def lingo_tfidf_similarity(smiles1: str, smiles2: str, q: int = 4, corpus: List[str] = None, vectorizer: LingoVectorizer = None) -> float:
     """
     LINGO-based TF-IDF cosine similarity.
-    
+
     Parameters
     ----------
     smiles1 : str
@@ -972,7 +978,7 @@ def lingo_tfidf_similarity(smiles1: str, smiles2: str, q: int = 4,
         Corpus for IDF calculation (required for meaningful IDF)
     vectorizer : LingoVectorizer
         Pre-fitted vectorizer (optional, for efficiency)
-        
+
     Returns
     -------
     float
@@ -980,20 +986,20 @@ def lingo_tfidf_similarity(smiles1: str, smiles2: str, q: int = 4,
     """
     if not SKLEARN_AVAILABLE:
         raise ImportError("sklearn is required for TF-IDF similarity")
-    
+
     if vectorizer is not None and vectorizer.is_fitted:
         vec1 = vectorizer.transform([smiles1])
         vec2 = vectorizer.transform([smiles2])
     else:
         if corpus is None:
             corpus = [smiles1, smiles2]
-        
+
         vectorizer = LingoVectorizer(q=q, use_idf=True)
         vectorizer.fit(corpus)
-        
+
         vec1 = vectorizer.transform([smiles1])
         vec2 = vectorizer.transform([smiles2])
-    
+
     sim = sklearn_cosine_similarity(vec1, vec2)[0, 0]
     return sim
 
@@ -1001,6 +1007,7 @@ def lingo_tfidf_similarity(smiles1: str, smiles2: str, q: int = 4,
 # ============================================================================
 # 9. SMILES TF-IDF Cosine Similarity (chemical tokenization)
 # ============================================================================
+
 
 class SMILESTokenizer:
     """
@@ -1012,20 +1019,78 @@ class SMILESTokenizer:
     """
 
     # Ordered longest-first so that '@@' beats '@', '@TH1' beats '@', etc.
-    _PATTERNS = sorted([
-        '@@',
-        'Br', 'Cl',
-        'Si', 'Se', 'se', 'As', 'as', 'Te', 'te',
-        'Na', 'Ca', 'Mg', 'Fe', 'Zn', 'Cu', 'Mn', 'Co', 'Ni',
-        'Al', 'Li', 'Ag', 'Au', 'Pt', 'Pd', 'Cr', 'Ti', 'Sn',
-        'Pb', 'Hg', 'Cd', 'Ba', 'Sr', 'Bi', 'Sb', 'Ge', 'Ga',
-        'In', 'Tl', 'Be', 'Ra', 'Ru', 'Rh', 'Os', 'Ir', 'Mo',
-        'Nb', 'Ta', 'Re', 'Tc',
-        'La', 'Ce', 'Pr', 'Nd', 'Sm', 'Eu', 'Gd', 'Tb',
-        'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu',
-    ], key=len, reverse=True)
+    _PATTERNS = sorted(
+        [
+            "@@",
+            "Br",
+            "Cl",
+            "Si",
+            "Se",
+            "se",
+            "As",
+            "as",
+            "Te",
+            "te",
+            "Na",
+            "Ca",
+            "Mg",
+            "Fe",
+            "Zn",
+            "Cu",
+            "Mn",
+            "Co",
+            "Ni",
+            "Al",
+            "Li",
+            "Ag",
+            "Au",
+            "Pt",
+            "Pd",
+            "Cr",
+            "Ti",
+            "Sn",
+            "Pb",
+            "Hg",
+            "Cd",
+            "Ba",
+            "Sr",
+            "Bi",
+            "Sb",
+            "Ge",
+            "Ga",
+            "In",
+            "Tl",
+            "Be",
+            "Ra",
+            "Ru",
+            "Rh",
+            "Os",
+            "Ir",
+            "Mo",
+            "Nb",
+            "Ta",
+            "Re",
+            "Tc",
+            "La",
+            "Ce",
+            "Pr",
+            "Nd",
+            "Sm",
+            "Eu",
+            "Gd",
+            "Tb",
+            "Dy",
+            "Ho",
+            "Er",
+            "Tm",
+            "Yb",
+            "Lu",
+        ],
+        key=len,
+        reverse=True,
+    )
 
-    _TOKEN_RE = re.compile('|'.join(re.escape(p) for p in _PATTERNS) + '|.')
+    _TOKEN_RE = re.compile("|".join(re.escape(p) for p in _PATTERNS) + "|.")
 
     def tokenize(self, smiles: str) -> List[str]:
         """Split a SMILES string into chemical tokens."""
@@ -1035,10 +1100,9 @@ class SMILESTokenizer:
         return self.tokenize(smiles)
 
 
-def smiles_tfidf_similarity(smiles1: str, smiles2: str,
-                             corpus: List[str] = None,
-                             ngram_range: Tuple[int, int] = (1, 2),
-                             vectorizer=None) -> float:
+def smiles_tfidf_similarity(
+    smiles1: str, smiles2: str, corpus: List[str] = None, ngram_range: Tuple[int, int] = (1, 2), vectorizer=None
+) -> float:
     """
     TF-IDF cosine similarity with chemically-aware tokenization.
 
@@ -1074,7 +1138,7 @@ def smiles_tfidf_similarity(smiles1: str, smiles2: str,
         tokenizer = SMILESTokenizer()
         vectorizer = TfidfVectorizer(
             tokenizer=tokenizer,
-            analyzer='word',
+            analyzer="word",
             lowercase=False,
             token_pattern=None,
             ngram_range=ngram_range,
@@ -1092,8 +1156,8 @@ def smiles_tfidf_similarity(smiles1: str, smiles2: str,
 # 10. Jellyfish-based string similarity metrics
 # ============================================================================
 
-def damerau_levenshtein_similarity(smiles1: str, smiles2: str,
-                                    preprocess: bool = True) -> float:
+
+def damerau_levenshtein_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float:
     """
     Damerau-Levenshtein similarity (transpositions count as one edit).
 
@@ -1124,8 +1188,7 @@ def damerau_levenshtein_similarity(smiles1: str, smiles2: str,
     return 1.0 - jellyfish.damerau_levenshtein_distance(smiles1, smiles2) / max_len
 
 
-def jaro_similarity(smiles1: str, smiles2: str,
-                    preprocess: bool = True) -> float:
+def jaro_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float:
     """
     Jaro similarity between two SMILES strings.
 
@@ -1150,8 +1213,7 @@ def jaro_similarity(smiles1: str, smiles2: str,
     return jellyfish.jaro_similarity(smiles1, smiles2)
 
 
-def jaro_winkler_similarity(smiles1: str, smiles2: str,
-                             preprocess: bool = True) -> float:
+def jaro_winkler_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float:
     """
     Jaro-Winkler similarity — Jaro with extra weight for common prefixes.
 
@@ -1176,8 +1238,7 @@ def jaro_winkler_similarity(smiles1: str, smiles2: str,
     return jellyfish.jaro_winkler_similarity(smiles1, smiles2)
 
 
-def hamming_similarity(smiles1: str, smiles2: str,
-                       preprocess: bool = True) -> float:
+def hamming_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float:
     """
     Hamming similarity between two SMILES strings.
 
@@ -1214,18 +1275,19 @@ def hamming_similarity(smiles1: str, smiles2: str,
 # 11. Normalized Compression Distance (NCD) similarity
 # ============================================================================
 
+
 def _compress_bytes(data: bytes, compresslevel: int = 9) -> int:
     """Return compressed size of *data* using gzip with mtime=0 (deterministic)."""
     import gzip as _gzip
     import io as _io
+
     buf = _io.BytesIO()
-    with _gzip.GzipFile(fileobj=buf, mode='wb', compresslevel=compresslevel, mtime=0) as f:
+    with _gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=compresslevel, mtime=0) as f:
         f.write(data)
     return len(buf.getvalue())
 
 
-def ncd_similarity(smiles1: str, smiles2: str,
-                   preprocess: bool = True) -> float:
+def ncd_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float:
     """
     Normalized Compression Distance (NCD) similarity using gzip.
 
@@ -1259,9 +1321,9 @@ def ncd_similarity(smiles1: str, smiles2: str,
     if preprocess:
         smiles1 = preprocess_smiles(smiles1)
         smiles2 = preprocess_smiles(smiles2)
-    a = smiles1.encode('utf-8')
-    b = smiles2.encode('utf-8')
-    sep = b'|'
+    a = smiles1.encode("utf-8")
+    b = smiles2.encode("utf-8")
+    sep = b"|"
     c_a = _compress_bytes(a)
     c_b = _compress_bytes(b)
     c_ab = _compress_bytes(a + sep + b)
@@ -1279,103 +1341,75 @@ def ncd_similarity(smiles1: str, smiles2: str,
 # ============================================================================
 
 AVAILABLE_METHODS = {
-    'edit': {
-        'function': edit_similarity,
-        'description': 'Edit distance similarity',
-        'params': {}
+    "edit": {"function": edit_similarity, "description": "Edit distance similarity", "params": {}},
+    "nlcs": {"function": nlcs_similarity, "description": "Normalized Longest Common Subsequence", "params": {}},
+    "clcs": {"function": clcs_similarity, "description": "Combined LCS models", "params": {}},
+    "substring": {
+        "function": lambda s1, s2: substring_kernel_similarity(s1, s2, normalized=True),
+        "description": "Substring kernel (normalized)",
+        "params": {},
     },
-    'nlcs': {
-        'function': nlcs_similarity,
-        'description': 'Normalized Longest Common Subsequence',
-        'params': {}
+    "smifp_cbd": {
+        "function": smifp_similarity_cityblock,
+        "description": "SMILES fingerprint 34D with City Block Distance (Manhattan)",
+        "params": {},
+        "requires": "scipy",
     },
-    'clcs': {
-        'function': clcs_similarity,
-        'description': 'Combined LCS models',
-        'params': {}
+    "smifp_tanimoto": {"function": smifp_similarity_tanimoto, "description": "SMILES fingerprint 34D with Tanimoto", "params": {}},
+    "smifp38_cbd": {
+        "function": lambda s1, s2: smifp_similarity_cityblock(s1, s2, chars=SMIFP_CHARS_38),
+        "description": "SMILES fingerprint 38D with City Block Distance (Manhattan)",
+        "params": {},
+        "requires": "scipy",
     },
-    'substring': {
-        'function': lambda s1, s2: substring_kernel_similarity(s1, s2, normalized=True),
-        'description': 'Substring kernel (normalized)',
-        'params': {}
+    "smifp38_tanimoto": {
+        "function": lambda s1, s2: smifp_similarity_tanimoto(s1, s2, chars=SMIFP_CHARS_38),
+        "description": "SMILES fingerprint 38D with Tanimoto",
+        "params": {},
     },
-    'smifp_cbd': {
-        'function': smifp_similarity_cityblock,
-        'description': 'SMILES fingerprint 34D with City Block Distance (Manhattan)',
-        'params': {},
-        'requires': 'scipy'
+    "lingo": {"function": lingo_similarity, "description": "LINGO similarity (q=4)", "params": {"q": 4}},
+    "lingo3": {"function": lambda s1, s2: lingo_similarity(s1, s2, q=3), "description": "LINGO similarity (q=3)", "params": {"q": 3}},
+    "lingo5": {"function": lambda s1, s2: lingo_similarity(s1, s2, q=5), "description": "LINGO similarity (q=5)", "params": {"q": 5}},
+    "smiles_tfidf": {
+        "function": smiles_tfidf_similarity,
+        "description": "TF-IDF cosine similarity with chemical tokenization (ngram (1,2))",
+        "params": {"ngram_range": (1, 2)},
+        "requires": "sklearn",
     },
-    'smifp_tanimoto': {
-        'function': smifp_similarity_tanimoto,
-        'description': 'SMILES fingerprint 34D with Tanimoto',
-        'params': {}
+    "smiles_tfidf13": {
+        "function": lambda s1, s2: smiles_tfidf_similarity(s1, s2, ngram_range=(1, 3)),
+        "description": "TF-IDF cosine similarity with chemical tokenization (ngram (1,3))",
+        "params": {"ngram_range": (1, 3)},
+        "requires": "sklearn",
     },
-    'smifp38_cbd': {
-        'function': lambda s1, s2: smifp_similarity_cityblock(s1, s2, chars=SMIFP_CHARS_38),
-        'description': 'SMILES fingerprint 38D with City Block Distance (Manhattan)',
-        'params': {},
-        'requires': 'scipy'
+    "damerau_levenshtein": {
+        "function": damerau_levenshtein_similarity,
+        "description": "Damerau-Levenshtein similarity (transpositions as 1 edit)",
+        "params": {},
+        "requires": "jellyfish",
     },
-    'smifp38_tanimoto': {
-        'function': lambda s1, s2: smifp_similarity_tanimoto(s1, s2, chars=SMIFP_CHARS_38),
-        'description': 'SMILES fingerprint 38D with Tanimoto',
-        'params': {}
+    "jaro": {
+        "function": jaro_similarity,
+        "description": "Jaro similarity",
+        "params": {},
+        "requires": "jellyfish",
     },
-    'lingo': {
-        'function': lingo_similarity,
-        'description': 'LINGO similarity (q=4)',
-        'params': {'q': 4}
+    "jaro_winkler": {
+        "function": jaro_winkler_similarity,
+        "description": "Jaro-Winkler similarity (prefix-weighted Jaro)",
+        "params": {},
+        "requires": "jellyfish",
     },
-    'lingo3': {
-        'function': lambda s1, s2: lingo_similarity(s1, s2, q=3),
-        'description': 'LINGO similarity (q=3)',
-        'params': {'q': 3}
+    "hamming": {
+        "function": hamming_similarity,
+        "description": "Hamming similarity (shorter string padded with spaces)",
+        "params": {},
+        "requires": "jellyfish",
     },
-    'lingo5': {
-        'function': lambda s1, s2: lingo_similarity(s1, s2, q=5),
-        'description': 'LINGO similarity (q=5)',
-        'params': {'q': 5}
-    },
-    'smiles_tfidf': {
-        'function': smiles_tfidf_similarity,
-        'description': 'TF-IDF cosine similarity with chemical tokenization (ngram (1,2))',
-        'params': {'ngram_range': (1, 2)},
-        'requires': 'sklearn',
-    },
-    'smiles_tfidf13': {
-        'function': lambda s1, s2: smiles_tfidf_similarity(s1, s2, ngram_range=(1, 3)),
-        'description': 'TF-IDF cosine similarity with chemical tokenization (ngram (1,3))',
-        'params': {'ngram_range': (1, 3)},
-        'requires': 'sklearn',
-    },
-    'damerau_levenshtein': {
-        'function': damerau_levenshtein_similarity,
-        'description': 'Damerau-Levenshtein similarity (transpositions as 1 edit)',
-        'params': {},
-        'requires': 'jellyfish',
-    },
-    'jaro': {
-        'function': jaro_similarity,
-        'description': 'Jaro similarity',
-        'params': {},
-        'requires': 'jellyfish',
-    },
-    'jaro_winkler': {
-        'function': jaro_winkler_similarity,
-        'description': 'Jaro-Winkler similarity (prefix-weighted Jaro)',
-        'params': {},
-        'requires': 'jellyfish',
-    },
-    'hamming': {
-        'function': hamming_similarity,
-        'description': 'Hamming similarity (shorter string padded with spaces)',
-        'params': {},
-        'requires': 'jellyfish',
-    },
-    'ncd': {
-        'function': ncd_similarity,
-        'description': 'Normalized Compression Distance similarity (gzip, universal/parameter-free)',
-        'params': {},
+    "ncd": {
+        "function": ncd_similarity,
+        "description": "Normalized Compression Distance similarity (gzip, universal/parameter-free)",
+        "params": {},
     },
 }
 
@@ -1383,12 +1417,12 @@ AVAILABLE_METHODS = {
 def get_similarity_function(method: str) -> Callable:
     """
     Get similarity function by method name.
-    
+
     Parameters
     ----------
     method : str
         Method name (e.g., 'lingo', 'edit', 'nlcs')
-        
+
     Returns
     -------
     Callable
@@ -1396,31 +1430,30 @@ def get_similarity_function(method: str) -> Callable:
     """
     if method not in AVAILABLE_METHODS:
         raise ValueError(f"Unknown method: {method}. Available: {list(AVAILABLE_METHODS.keys())}")
-    
+
     method_info = AVAILABLE_METHODS[method]
-    
-    if 'requires' in method_info:
-        req = method_info['requires']
-        if req == 'scipy' and not SCIPY_AVAILABLE:
+
+    if "requires" in method_info:
+        req = method_info["requires"]
+        if req == "scipy" and not SCIPY_AVAILABLE:
             raise ImportError(f"Method '{method}' requires scipy")
-        if req == 'sklearn' and not SKLEARN_AVAILABLE:
+        if req == "sklearn" and not SKLEARN_AVAILABLE:
             raise ImportError(f"Method '{method}' requires scikit-learn")
-        if req == 'jellyfish' and not JELLYFISH_AVAILABLE:
+        if req == "jellyfish" and not JELLYFISH_AVAILABLE:
             raise ImportError(f"Method '{method}' requires jellyfish")
 
-    return method_info['function']
+    return method_info["function"]
 
 
 # ============================================================================
 # Batch Processing & Similarity Matrix Generation
 # ============================================================================
 
-def compute_similarity_matrix(smiles_list: List[str], 
-                               method: str = 'lingo',
-                               **kwargs) -> np.ndarray:
+
+def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", **kwargs) -> np.ndarray:
     """
     Compute pairwise similarity matrix for a list of SMILES.
-    
+
     Parameters
     ----------
     smiles_list : List[str]
@@ -1429,7 +1462,7 @@ def compute_similarity_matrix(smiles_list: List[str],
         Similarity method name
     **kwargs : dict
         Additional arguments for the similarity function
-        
+
     Returns
     -------
     np.ndarray
@@ -1437,26 +1470,23 @@ def compute_similarity_matrix(smiles_list: List[str],
     """
     n = len(smiles_list)
     sim_matrix = np.zeros((n, n))
-    
+
     sim_func = get_similarity_function(method)
-    
+
     for i in range(n):
         sim_matrix[i, i] = 1.0  # Self-similarity
         for j in range(i + 1, n):
             sim = sim_func(smiles_list[i], smiles_list[j], **kwargs)
             sim_matrix[i, j] = sim
             sim_matrix[j, i] = sim
-    
+
     return sim_matrix
 
 
-def compute_cross_similarity_matrix(templates: List[str], 
-                                     library: List[str],
-                                     method: str = 'lingo',
-                                     **kwargs) -> np.ndarray:
+def compute_cross_similarity_matrix(templates: List[str], library: List[str], method: str = "lingo", **kwargs) -> np.ndarray:
     """
     Compute similarity matrix between templates and library molecules.
-    
+
     Parameters
     ----------
     templates : List[str]
@@ -1467,7 +1497,7 @@ def compute_cross_similarity_matrix(templates: List[str],
         Similarity method name
     **kwargs : dict
         Additional arguments for the similarity function
-        
+
     Returns
     -------
     np.ndarray
@@ -1476,14 +1506,14 @@ def compute_cross_similarity_matrix(templates: List[str],
     n_lib = len(library)
     n_templates = len(templates)
     sim_matrix = np.zeros((n_lib, n_templates))
-    
+
     sim_func = get_similarity_function(method)
-    
+
     for i, lib_smiles in enumerate(library):
         for j, template_smiles in enumerate(templates):
             sim = sim_func(lib_smiles, template_smiles, **kwargs)
             sim_matrix[i, j] = sim
-    
+
     return sim_matrix
 
 
@@ -1491,58 +1521,61 @@ def compute_cross_similarity_matrix(templates: List[str],
 # File I/O Functions
 # ============================================================================
 
+
 def read_smiles_file(filepath: str) -> Tuple[str, str]:
     """
     Read SMILES from a .smi file.
-    
+
     Expected format: SMILES string (optionally followed by name/id)
-    
+
     Parameters
     ----------
     filepath : str
         Path to .smi file
-        
+
     Returns
     -------
     Tuple[str, str]
         (SMILES string, molecule name)
     """
-    with open(filepath, 'r') as f:
+    with open(filepath, "r") as f:
         content = f.read().strip()
-    
+
     parts = content.split()
     smiles = parts[0] if parts else ""
-    
+
     # Try to get name from file or content
     if len(parts) > 1:
         name = parts[1]
     else:
         name = Path(filepath).stem
-    
+
     return smiles, name
 
 
-def read_smiles_from_file(filepath: str, 
-                          smiles_col: Optional[Union[int, str]] = None,
-                          name_col: Optional[Union[int, str]] = None,
-                          delimiter: Optional[str] = None,
-                          header: bool = True,
-                          skip_errors: bool = True) -> Dict[str, str]:
+def read_smiles_from_file(
+    filepath: str,
+    smiles_col: Optional[Union[int, str]] = None,
+    name_col: Optional[Union[int, str]] = None,
+    delimiter: Optional[str] = None,
+    header: bool = True,
+    skip_errors: bool = True,
+) -> Dict[str, str]:
     """
     Read multiple SMILES from a single file.
-    
+
     Supports various formats:
     - .smi/.smiles: Space/tab-separated SMILES and optional name
     - .csv: Comma-separated with header
     - .tsv: Tab-separated with header
     - Generic text files with configurable delimiter
-    
+
     Parameters
     ----------
     filepath : str
         Path to file containing SMILES
     smiles_col : int or str, optional
-        Column index (0-based) or name for SMILES. 
+        Column index (0-based) or name for SMILES.
         Default: 0 for .smi, auto-detect for .csv/.tsv
     name_col : int or str, optional
         Column index (0-based) or name for molecule names.
@@ -1553,12 +1586,12 @@ def read_smiles_from_file(filepath: str,
         Whether file has a header row (default: True for .csv/.tsv, False for .smi)
     skip_errors : bool
         If True, skip lines that can't be parsed; if False, raise exception
-        
+
     Returns
     -------
     Dict[str, str]
         Dictionary mapping molecule names to SMILES strings
-        
+
     Examples
     --------
     >>> molecules = read_smiles_from_file("library.smi")
@@ -1567,19 +1600,19 @@ def read_smiles_from_file(filepath: str,
     """
     filepath = Path(filepath)
     ext = filepath.suffix.lower()
-    
+
     # Auto-detect format based on extension
     if delimiter is None:
-        if ext in ['.csv']:
-            delimiter = ','
-        elif ext in ['.tsv']:
-            delimiter = '\t'
+        if ext in [".csv"]:
+            delimiter = ","
+        elif ext in [".tsv"]:
+            delimiter = "\t"
         else:
             # For .smi, .smiles, .txt - use whitespace
             delimiter = None  # Will use split() for any whitespace
-    
+
     # Default header behavior based on extension
-    if ext in ['.smi', '.smiles']:
+    if ext in [".smi", ".smiles"]:
         header = False
         if smiles_col is None:
             smiles_col = 0
@@ -1590,19 +1623,19 @@ def read_smiles_from_file(filepath: str,
             smiles_col = 0
         if name_col is None:
             name_col = 1
-    
+
     molecules = {}
-    
-    with open(filepath, 'r') as f:
+
+    with open(filepath, "r") as f:
         lines = f.readlines()
-    
+
     if not lines:
         return molecules
-    
+
     # Process header if present
     start_idx = 0
     col_names = None
-    
+
     if header and lines:
         header_line = lines[0].strip()
         if delimiter:
@@ -1610,7 +1643,7 @@ def read_smiles_from_file(filepath: str,
         else:
             col_names = header_line.split()
         start_idx = 1
-        
+
         # Convert column names to indices if strings were provided
         if isinstance(smiles_col, str):
             try:
@@ -1622,37 +1655,37 @@ def read_smiles_from_file(filepath: str,
                 name_col = col_names.index(name_col)
             except ValueError:
                 raise ValueError(f"Name column '{name_col}' not found in header: {col_names}")
-    
+
     # Ensure indices are integers
     smiles_col = int(smiles_col) if smiles_col is not None else 0
     name_col = int(name_col) if name_col is not None else 1
-    
+
     # Process data lines
     unnamed_counter = 0
     for line_num, line in enumerate(lines[start_idx:], start=start_idx + 1):
         line = line.strip()
-        if not line or line.startswith('#'):
+        if not line or line.startswith("#"):
             continue
-        
+
         try:
             if delimiter:
                 parts = line.split(delimiter)
             else:
                 parts = line.split()
-            
+
             if len(parts) == 0:
                 continue
-            
+
             # Get SMILES
             if smiles_col >= len(parts):
                 if skip_errors:
                     continue
                 raise ValueError(f"Line {line_num}: SMILES column {smiles_col} out of range")
             smiles = parts[smiles_col].strip()
-            
+
             if not smiles:
                 continue
-            
+
             # Get name
             if name_col is not None and name_col < len(parts):
                 name = parts[name_col].strip()
@@ -1660,35 +1693,37 @@ def read_smiles_from_file(filepath: str,
                 # Generate name if not available
                 unnamed_counter += 1
                 name = f"mol_{unnamed_counter}"
-            
+
             # Handle duplicate names
             original_name = name
             counter = 1
             while name in molecules:
                 name = f"{original_name}_{counter}"
                 counter += 1
-            
+
             molecules[name] = smiles
-            
+
         except Exception as e:
             if skip_errors:
                 continue
             raise ValueError(f"Error parsing line {line_num}: {e}")
-    
+
     return molecules
 
 
-def read_molecules_from_source(source: str,
-                               smiles_col: Optional[Union[int, str]] = None,
-                               name_col: Optional[Union[int, str]] = None,
-                               delimiter: Optional[str] = None,
-                               header: Optional[bool] = None) -> Dict[str, str]:
+def read_molecules_from_source(
+    source: str,
+    smiles_col: Optional[Union[int, str]] = None,
+    name_col: Optional[Union[int, str]] = None,
+    delimiter: Optional[str] = None,
+    header: Optional[bool] = None,
+) -> Dict[str, str]:
     """
     Read molecules from either a directory or a file.
-    
+
     Automatically detects whether source is a directory (reads .smi files)
     or a file (reads multi-molecule format).
-    
+
     Parameters
     ----------
     source : str
@@ -1702,26 +1737,26 @@ def read_molecules_from_source(source: str,
         Column delimiter (for file input)
     header : bool, optional
         Whether file has header (for file input)
-        
+
     Returns
     -------
     Dict[str, str]
         Dictionary mapping molecule names to SMILES strings
     """
     source_path = Path(source)
-    
+
     if source_path.is_dir():
         return read_smiles_directory(str(source_path))
     elif source_path.is_file():
         kwargs = {}
         if smiles_col is not None:
-            kwargs['smiles_col'] = smiles_col
+            kwargs["smiles_col"] = smiles_col
         if name_col is not None:
-            kwargs['name_col'] = name_col
+            kwargs["name_col"] = name_col
         if delimiter is not None:
-            kwargs['delimiter'] = delimiter
+            kwargs["delimiter"] = delimiter
         if header is not None:
-            kwargs['header'] = header
+            kwargs["header"] = header
         return read_smiles_from_file(str(source_path), **kwargs)
     else:
         raise FileNotFoundError(f"Source not found: {source}")
@@ -1730,12 +1765,12 @@ def read_molecules_from_source(source: str,
 def read_smiles_directory(dirpath: str) -> Dict[str, str]:
     """
     Read all SMILES files from a directory.
-    
+
     Parameters
     ----------
     dirpath : str
         Path to directory containing .smi files
-        
+
     Returns
     -------
     Dict[str, str]
@@ -1743,25 +1778,22 @@ def read_smiles_directory(dirpath: str) -> Dict[str, str]:
     """
     molecules = {}
     dirpath = Path(dirpath)
-    
-    for filepath in sorted(dirpath.glob('*.smi')):
+
+    for filepath in sorted(dirpath.glob("*.smi")):
         smiles, name = read_smiles_file(str(filepath))
         if smiles:
             molecules[name] = smiles
-    
+
     return molecules
 
 
-def write_similarity_csv(output_path: str,
-                          library_names: List[str],
-                          template_names: List[str],
-                          sim_matrix: np.ndarray):
+def write_similarity_csv(output_path: str, library_names: List[str], template_names: List[str], sim_matrix: np.ndarray):
     """
     Write similarity matrix to CSV file.
-    
+
     Output format:
     Name,Similarity_{template1},Similarity_{template2},...
-    
+
     Parameters
     ----------
     output_path : str
@@ -1774,25 +1806,26 @@ def write_similarity_csv(output_path: str,
         Similarity matrix (library x templates)
     """
     # Create column names
-    columns = ['Name'] + [f'Similarity_{name}' for name in template_names]
-    
+    columns = ["Name"] + [f"Similarity_{name}" for name in template_names]
+
     # Create DataFrame
-    data = {'Name': library_names}
+    data = {"Name": library_names}
     for j, template_name in enumerate(template_names):
-        data[f'Similarity_{template_name}'] = sim_matrix[:, j]
+        data[f"Similarity_{template_name}"] = sim_matrix[:, j]
 
     df = pd.DataFrame(data)
-    df.to_csv(output_path, index=False, float_format='%.5f')
+    df.to_csv(output_path, index=False, float_format="%.5f")
 
 
 # ============================================================================
 # Command Line Interface
 # ============================================================================
 
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='Calculate SMILES-based similarity between molecules.',
+        description="Calculate SMILES-based similarity between molecules.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -1827,67 +1860,76 @@ Input formats:
 
 Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto, 
                    lingo, lingo3, lingo5
-        """
+        """,
     )
-    
-    parser.add_argument('templates', nargs='?', type=str,
-                        help='Directory or file containing template molecules (.smi, .csv, .tsv)')
-    parser.add_argument('database', nargs='?', type=str,
-                        help='Directory or file containing database/library molecules (.smi, .csv, .tsv)')
-    parser.add_argument('output', nargs='?', type=str,
-                        help='Output CSV file path')
-    
-    parser.add_argument('--method', '-m', type=str, default='lingo',
-                        choices=list(AVAILABLE_METHODS.keys()),
-                        help='Similarity method to use (default: lingo)')
-    
-    parser.add_argument('--all-methods', action='store_true',
-                        help='Calculate similarities using all available methods. Output files will be named METHOD_output.csv')
-    
+
+    parser.add_argument("templates", nargs="?", type=str, help="Directory or file containing template molecules (.smi, .csv, .tsv)")
+    parser.add_argument("database", nargs="?", type=str, help="Directory or file containing database/library molecules (.smi, .csv, .tsv)")
+    parser.add_argument("output", nargs="?", type=str, help="Output CSV file path")
+
+    parser.add_argument(
+        "--method", "-m", type=str, default="lingo", choices=list(AVAILABLE_METHODS.keys()), help="Similarity method to use (default: lingo)"
+    )
+
+    parser.add_argument(
+        "--all-methods",
+        action="store_true",
+        help="Calculate similarities using all available methods. Output files will be named METHOD_output.csv",
+    )
+
     # Template file options
-    templates_group = parser.add_argument_group('Template file options',
-                        'Options for reading templates from a file (ignored for directory input)')
-    templates_group.add_argument('--templates-smiles-col', type=str, default=None,
-                        metavar='COL',
-                        help='Column name or index (0-based) for SMILES in templates file')
-    templates_group.add_argument('--templates-name-col', type=str, default=None,
-                        metavar='COL',
-                        help='Column name or index (0-based) for names in templates file')
-    templates_group.add_argument('--templates-delimiter', type=str, default=None,
-                        metavar='DELIM',
-                        help='Column delimiter for templates file (auto-detected if not specified)')
-    templates_group.add_argument('--templates-no-header', action='store_true',
-                        help='Templates file has no header row')
-    
+    templates_group = parser.add_argument_group(
+        "Template file options", "Options for reading templates from a file (ignored for directory input)"
+    )
+    templates_group.add_argument(
+        "--templates-smiles-col", type=str, default=None, metavar="COL", help="Column name or index (0-based) for SMILES in templates file"
+    )
+    templates_group.add_argument(
+        "--templates-name-col", type=str, default=None, metavar="COL", help="Column name or index (0-based) for names in templates file"
+    )
+    templates_group.add_argument(
+        "--templates-delimiter",
+        type=str,
+        default=None,
+        metavar="DELIM",
+        help="Column delimiter for templates file (auto-detected if not specified)",
+    )
+    templates_group.add_argument("--templates-no-header", action="store_true", help="Templates file has no header row")
+
     # Database file options
-    database_group = parser.add_argument_group('Database file options',
-                        'Options for reading database from a file (ignored for directory input)')
-    database_group.add_argument('--database-smiles-col', type=str, default=None,
-                        metavar='COL',
-                        help='Column name or index (0-based) for SMILES in database file')
-    database_group.add_argument('--database-name-col', type=str, default=None,
-                        metavar='COL',
-                        help='Column name or index (0-based) for names in database file')
-    database_group.add_argument('--database-delimiter', type=str, default=None,
-                        metavar='DELIM',
-                        help='Column delimiter for database file (auto-detected if not specified)')
-    database_group.add_argument('--database-no-header', action='store_true',
-                        help='Database file has no header row')
-    
-    parser.add_argument('--list-methods', action='store_true',
-                        help='List available similarity methods and exit')
+    database_group = parser.add_argument_group("Database file options", "Options for reading database from a file (ignored for directory input)")
+    database_group.add_argument(
+        "--database-smiles-col", type=str, default=None, metavar="COL", help="Column name or index (0-based) for SMILES in database file"
+    )
+    database_group.add_argument(
+        "--database-name-col", type=str, default=None, metavar="COL", help="Column name or index (0-based) for names in database file"
+    )
+    database_group.add_argument(
+        "--database-delimiter",
+        type=str,
+        default=None,
+        metavar="DELIM",
+        help="Column delimiter for database file (auto-detected if not specified)",
+    )
+    database_group.add_argument("--database-no-header", action="store_true", help="Database file has no header row")
 
-    parser.add_argument('--canonicalize', action='store_true',
-                        help='Canonicalize SMILES with RDKit before comparison (requires rdkit). '
-                             'Ensures "CCO" and "OCC" are treated as the same molecule.')
+    parser.add_argument("--list-methods", action="store_true", help="List available similarity methods and exit")
 
-    parser.add_argument('--inchi', action='store_true',
-                        help='Convert SMILES to InChI (stripping the "InChI=" prefix) before '
-                             'comparison (requires rdkit). Useful for representation-independent '
-                             'similarity; implies --canonicalize.')
+    parser.add_argument(
+        "--canonicalize",
+        action="store_true",
+        help="Canonicalize SMILES with RDKit before comparison (requires rdkit). " 'Ensures "CCO" and "OCC" are treated as the same molecule.',
+    )
 
-    parser.add_argument('--verbose', '-v', action='store_true',
-                        help='Print progress information')
+    parser.add_argument(
+        "--inchi",
+        action="store_true",
+        help='Convert SMILES to InChI (stripping the "InChI=" prefix) before '
+        "comparison (requires rdkit). Useful for representation-independent "
+        "similarity; implies --canonicalize.",
+    )
+
+    parser.add_argument("--verbose", "-v", action="store_true", help="Print progress information")
 
     return parser.parse_args()
 
@@ -1895,12 +1937,12 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
 def _parse_col_arg(col_arg: Optional[str]) -> Optional[Union[int, str]]:
     """
     Parse column argument - convert to int if numeric, otherwise keep as string.
-    
+
     Parameters
     ----------
     col_arg : str or None
         Column argument from command line
-        
+
     Returns
     -------
     int, str, or None
@@ -1917,70 +1959,70 @@ def _parse_col_arg(col_arg: Optional[str]) -> Optional[Union[int, str]]:
 def main():
     """Main function for command line execution."""
     args = parse_args()
-    
+
     # List methods if requested
     if args.list_methods:
         print("\nAvailable similarity methods:")
         print("-" * 60)
         for name, info in AVAILABLE_METHODS.items():
-            req = f" (requires {info.get('requires', 'nothing')})" if 'requires' in info else ""
+            req = f" (requires {info.get('requires', 'nothing')})" if "requires" in info else ""
             print(f"  {name:20s} - {info['description']}{req}")
         print()
         return
-    
+
     # Check required arguments
     if not args.templates or not args.database or not args.output:
         print("Error: templates, database, and output are required.")
         print("Use --help for usage information.")
         sys.exit(1)
-    
+
     # Parse column arguments
     templates_smiles_col = _parse_col_arg(args.templates_smiles_col)
     templates_name_col = _parse_col_arg(args.templates_name_col)
     database_smiles_col = _parse_col_arg(args.database_smiles_col)
     database_name_col = _parse_col_arg(args.database_name_col)
-    
+
     # Read templates
     if args.verbose:
         source_type = "directory" if Path(args.templates).is_dir() else "file"
         print(f"Reading templates from {source_type}: {args.templates}")
-    
+
     templates = read_molecules_from_source(
         args.templates,
         smiles_col=templates_smiles_col,
         name_col=templates_name_col,
         delimiter=args.templates_delimiter,
-        header=None if not args.templates_no_header else False
+        header=None if not args.templates_no_header else False,
     )
-    
+
     # Read database/library
     if args.verbose:
         source_type = "directory" if Path(args.database).is_dir() else "file"
         print(f"Reading database from {source_type}: {args.database}")
-    
+
     library = read_molecules_from_source(
         args.database,
         smiles_col=database_smiles_col,
         name_col=database_name_col,
         delimiter=args.database_delimiter,
-        header=None if not args.database_no_header else False
+        header=None if not args.database_no_header else False,
     )
-    
+
     if not templates:
         print(f"Error: No molecules found in templates source: {args.templates}")
         sys.exit(1)
-    
+
     if not library:
         print(f"Error: No molecules found in database source: {args.database}")
         sys.exit(1)
-    
+
     if args.verbose:
         print(f"Found {len(templates)} templates and {len(library)} database molecules")
         if args.all_methods:
             print(f"Using all methods: {', '.join(AVAILABLE_METHODS.keys())}")
         else:
             print(f"Using method: {args.method}")
-    
+
     # Get ordered lists
     template_names = list(templates.keys())
     template_smiles = [templates[n] for n in template_names]
@@ -1990,28 +2032,31 @@ def main():
     # Optional SMILES canonicalization / InChI conversion
     if args.inchi or args.canonicalize:
         if not RDKIT_AVAILABLE:
-            print("Warning: --canonicalize/--inchi requested but RDKit is not installed. "
-                  "Install with: pip install rdkit", file=sys.stderr)
+            print("Warning: --canonicalize/--inchi requested but RDKit is not installed. " "Install with: pip install rdkit", file=sys.stderr)
         else:
             if args.inchi:
                 if args.verbose:
                     print("Converting SMILES to InChI (stripping 'InChI=' prefix)...")
+
                 def _transform(s):
                     return smiles_to_inchi(s) or s
+
             else:
                 if args.verbose:
                     print("Canonicalizing SMILES with RDKit...")
+
                 def _transform(s):
                     return canonicalize_smiles(s)
+
             template_smiles = [_transform(s) for s in template_smiles]
-            library_smiles  = [_transform(s) for s in library_smiles]
+            library_smiles = [_transform(s) for s in library_smiles]
 
     # Determine which methods to use
     if args.all_methods:
         methods_to_run = list(AVAILABLE_METHODS.keys())
     else:
         methods_to_run = [args.method]
-    
+
     # Calculate similarities for each method
     for method in methods_to_run:
         if args.all_methods:
@@ -2020,24 +2065,22 @@ def main():
             method_output = output_path.parent / f"{method}_{output_path.name}"
         else:
             method_output = args.output
-        
+
         if args.verbose:
             if args.all_methods:
                 print(f"\nProcessing method: {method}")
             print("Calculating similarities...")
             total_comparisons = len(library) * len(templates)
             print(f"  Total comparisons: {total_comparisons:,}")
-        
-        sim_matrix = compute_cross_similarity_matrix(
-            template_smiles, library_smiles, method=method
-        )
-        
+
+        sim_matrix = compute_cross_similarity_matrix(template_smiles, library_smiles, method=method)
+
         # Write output
         if args.verbose:
             print(f"Writing output to: {method_output}")
-        
+
         write_similarity_csv(method_output, library_names, template_names, sim_matrix)
-    
+
     if args.verbose:
         if args.all_methods:
             print(f"\nCompleted! Generated {len(methods_to_run)} output files.")
@@ -2048,12 +2091,13 @@ def main():
 # Demo / Test
 # ============================================================================
 
+
 def demo():
     """Run a demonstration of the similarity functions."""
     print("=" * 60)
     print("SMILES-based Similarity Kernels - Demo")
     print("=" * 60)
-    
+
     # Example SMILES strings
     smiles1 = "OC(O)=O"  # Carbonic acid
     smiles2 = "CCCCC(O)=C"  # Example
@@ -2061,7 +2105,7 @@ def demo():
     smiles4 = "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"  # Caffeine
     smiles5 = "c1ccc(Cl)cc1"  # Chlorobenzene
     smiles6 = "c1ccc(Br)cc1"  # Bromobenzene
-    
+
     print(f"\nTest SMILES strings:")
     print(f"  S1: {smiles1} (Carbonic acid)")
     print(f"  S2: {smiles2}")
@@ -2069,18 +2113,18 @@ def demo():
     print(f"  S4: {smiles4} (Caffeine)")
     print(f"  S5: {smiles5} (Chlorobenzene)")
     print(f"  S6: {smiles6} (Bromobenzene)")
-    
+
     print("\n--- Preprocessing Demo ---")
     print(f"  Chlorobenzene original: {smiles5}")
     print(f"  Chlorobenzene processed: {preprocess_smiles(smiles5)}")
     print(f"  Bromobenzene original: {smiles6}")
     print(f"  Bromobenzene processed: {preprocess_smiles(smiles6)}")
-    
+
     # Test with more complex SMILES
     complex_smiles = "[Si](C)(C)O[Si](C)(C)C"  # Siloxane
     print(f"  Siloxane original: {complex_smiles}")
     print(f"  Siloxane processed: {preprocess_smiles(complex_smiles)}")
-    
+
     print("\n--- Pairwise Similarities (Chlorobenzene vs Bromobenzene) ---")
     print(f"  Edit Distance:     {edit_similarity(smiles5, smiles6):.4f}")
     print(f"  NLCS:              {nlcs_similarity(smiles5, smiles6):.4f}")
@@ -2088,28 +2132,28 @@ def demo():
     print(f"  Substring Kernel:  {substring_kernel_similarity(smiles5, smiles6, normalized=True):.4f}")
     print(f"  SMIfp (Tanimoto):  {smifp_similarity_tanimoto(smiles5, smiles6):.4f}")
     print(f"  LINGO (q=4):       {lingo_similarity(smiles5, smiles6, q=4):.4f}")
-    
+
     print("\n--- Similarity Matrix (4 molecules, LINGO method) ---")
     test_smiles = [smiles1, smiles2, smiles3, smiles4]
-    test_names = ['Carbonic', 'S2', 'Aspirin', 'Caffeine']
-    sim_matrix = compute_similarity_matrix(test_smiles, method='lingo')
-    
+    test_names = ["Carbonic", "S2", "Aspirin", "Caffeine"]
+    sim_matrix = compute_similarity_matrix(test_smiles, method="lingo")
+
     # Print header
     print("\n" + " " * 12, end="")
     for name in test_names:
         print(f"{name:>10s}", end="")
     print()
-    
+
     # Print matrix
     for i, (name, row) in enumerate(zip(test_names, sim_matrix)):
         print(f"{name:>12s}", end="")
         for val in row:
             print(f"{val:>10.3f}", end="")
         print()
-    
+
     print("\n--- Multi-character element list ---")
     print(f"  Elements handled: {', '.join(sorted(ELEMENT_REPLACEMENTS.keys()))}")
-    
+
     print("\n" + "=" * 60)
     print("Demo complete!")
 
