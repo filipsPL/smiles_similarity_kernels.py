@@ -13,3 +13,6 @@ rdkit>=2022.03
 
 # Optional: Damerau-Levenshtein, Jaro, Jaro-Winkler, Hamming methods
 jellyfish>=1.0
+
+# just for testing
+pytest
