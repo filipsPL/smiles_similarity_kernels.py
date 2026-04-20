@@ -489,12 +489,13 @@ class TestNcdSimilarity:
 
 class TestAvailableMethods:
     EXPECTED = {
-        "edit", "nlcs", "clcs", "substring",
-        "smifp_cbd", "smifp_tanimoto", "smifp38_cbd", "smifp38_tanimoto",
-        "lingo", "lingo3", "lingo5",
-        "smiles_tfidf", "smiles_tfidf13", "smiles_tfidf23", "smiles_tfidf14",
-        "damerau_levenshtein", "jaro", "jaro_winkler", "hamming",
-        "ncd",
+    "edit", "nlcs", "clcs", "substring", "smifp_cbd", "smifp_tanimoto",
+                   "smifp38_cbd", "smifp38_tanimoto", "lingo", "lingo3", "lingo5",
+                   "lingo_tversky", "lingo_tversky_sym", "lingo_dice",
+                   "spectrum", "spectrum3", "spectrum5", "spectrum_cosine",
+                   "mismatch", "mismatch3", "mismatch5", "lcs_substring",
+                   "smiles_tfidf", "smiles_tfidf13", "smiles_tfidf23", "smiles_tfidf14",
+                   "damerau_levenshtein", "jaro", "jaro_winkler", "hamming", "ncd",
     }
 
     def test_all_methods_registered(self):

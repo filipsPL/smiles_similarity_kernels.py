@@ -314,6 +314,225 @@ def smiles_to_inchi(smiles: str) -> str:
         return ""
 
 
+# ----------------------------------------------------------------------------
+# InChI preprocessing and layer extraction
+# ----------------------------------------------------------------------------
+
+# Standard InChI layer prefixes.  Each appears after a '/' separator in the
+# string (except the formula, which is the first field after the version).
+#
+# Standard InChI format:
+#   InChI=<version>/<formula>/c<conn>/h<H>/q<charge>/p<protons>
+#                  /b<dbStereo>/t<tetraStereo>/m<parity>/s<stereoType>
+#                  /i<isotope>/h<mobileH>/f<fixedH>/r<reconnectedMetals>
+#
+# The version is always the first segment (e.g. '1S' for standard InChI).
+# The formula layer has NO leading letter; every other layer starts with a
+# single-letter prefix indicating the layer type.
+INCHI_LAYERS = {
+    "formula": None,  # special: first segment after version, no prefix letter
+    "connections": "c",
+    "hydrogens": "h",
+    "charge": "q",
+    "protons": "p",
+    "stereo_db": "b",
+    "stereo_tet": "t",
+    "stereo_parity": "m",
+    "stereo_type": "s",
+    "isotope": "i",
+    "fixedH": "f",
+    "reconnected": "r",
+}
+
+# Set of all single-letter layer prefixes for quick lookup
+_INCHI_LAYER_PREFIXES = {v for v in INCHI_LAYERS.values() if v is not None}
+
+
+def preprocess_inchi(inchi: str, strip_version: bool = True) -> str:
+    """
+    Minimal, layer-respecting preprocessing for InChI strings.
+
+    Unlike SMILES, InChI strings are *layered* (segments separated by '/')
+    and multi-character element symbols appear with count suffixes in the
+    formula layer (e.g. 'C6H5Cl').  Character-level substitution — as used
+    for SMILES — would therefore break the parseability of the layers and
+    create meaningless q-grams.
+
+    This function performs only minimal cleanup:
+      - strips the leading 'InChI=' prefix if present (idempotent with
+        :func:`smiles_to_inchi`, which already removes it)
+      - optionally strips the version tag ('1S/' or '1/') so that string
+        similarity is not artificially inflated by a shared constant prefix
+
+    Layer separators '/' are deliberately **not** modified — they serve as
+    natural boundaries that prevent q-grams from straddling unrelated
+    layers.
+
+    Parameters
+    ----------
+    inchi : str
+        Input InChI string (with or without 'InChI=' prefix)
+    strip_version : bool
+        If True (default), strip the '1S/' or '1/' version tag.  Every
+        standard InChI shares this prefix, so keeping it inflates the
+        pairwise similarity of short molecules.
+
+    Returns
+    -------
+    str
+        Cleaned InChI string
+
+    Examples
+    --------
+    >>> preprocess_inchi("InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3")
+    'C2H6O/c1-2-3/h3H,2H2,1H3'
+    >>> preprocess_inchi("1S/CH4/h1H4", strip_version=False)
+    '1S/CH4/h1H4'
+    """
+    if not inchi:
+        return inchi
+    if inchi.startswith("InChI="):
+        inchi = inchi[6:]
+    if strip_version:
+        for prefix in ("1S/", "1/"):
+            if inchi.startswith(prefix):
+                inchi = inchi[len(prefix) :]
+                break
+    return inchi
+
+
+def extract_inchi_layers(inchi: str, layers: Union[str, List[str]]) -> str:
+    """
+    Extract one or more layers from an InChI string.
+
+    Allows comparison of molecules based on a selected subset of structural
+    information — for example, formula-only (very coarse), connections-only
+    (topology without hydrogens or stereochemistry), or connections+hydrogens
+    (most structural information, stereochemistry excluded).
+
+    The leading 'InChI=' prefix and '1S/'/'1/' version tag are stripped
+    before extraction.  Layers are returned concatenated with '/' separators
+    in the order given, each still carrying its single-letter prefix
+    (except the formula layer, which has no prefix).  If a requested layer
+    is absent from the input, it is silently omitted.
+
+    Parameters
+    ----------
+    inchi : str
+        Input InChI string (with or without 'InChI=' prefix)
+    layers : str or List[str]
+        Layer name(s) to extract.  Supported names are the keys of
+        :data:`INCHI_LAYERS`:
+
+        - 'formula'      — molecular formula (e.g. 'C9H8O4')
+        - 'connections'  — atom-connection layer ('c...')
+        - 'hydrogens'    — hydrogen layer ('h...')
+        - 'charge'       — charge layer ('q...')
+        - 'protons'      — proton layer ('p...')
+        - 'stereo_db'    — double-bond stereo ('b...')
+        - 'stereo_tet'   — tetrahedral stereo ('t...')
+        - 'stereo_parity'— parity ('m...')
+        - 'stereo_type'  — stereo type ('s...')
+        - 'isotope'      — isotope ('i...')
+        - 'fixedH'       — fixed-H ('f...')
+        - 'reconnected'  — reconnected-metals ('r...')
+
+        A single string is treated as a one-element list.  Use 'all' to
+        return the full preprocessed InChI (equivalent to
+        ``preprocess_inchi``).
+
+    Returns
+    -------
+    str
+        The extracted layer(s) concatenated with '/' separators.  Empty
+        string if the input is empty or no requested layers are present.
+
+    Examples
+    --------
+    >>> inchi = "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)"
+    >>> extract_inchi_layers(inchi, "formula")
+    'C9H8O4'
+    >>> extract_inchi_layers(inchi, "connections")
+    'c1-6(10)13-8-5-3-2-4-7(8)9(11)12'
+    >>> extract_inchi_layers(inchi, ["formula", "connections"])
+    'C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12'
+    """
+    if not inchi:
+        return ""
+
+    if isinstance(layers, str):
+        if layers == "all":
+            return preprocess_inchi(inchi, strip_version=True)
+        layers = [layers]
+
+    # Validate layer names
+    for layer in layers:
+        if layer not in INCHI_LAYERS:
+            raise ValueError(f"Unknown InChI layer: '{layer}'. " f"Available: {list(INCHI_LAYERS.keys())}")
+
+    cleaned = preprocess_inchi(inchi, strip_version=True)
+    if not cleaned:
+        return ""
+
+    # Split on '/' and classify each segment by its prefix letter.
+    # The first segment is always the formula (no prefix letter).
+    segments = cleaned.split("/")
+    if not segments:
+        return ""
+
+    layer_contents: Dict[str, str] = {}
+    layer_contents["formula"] = segments[0]
+
+    for seg in segments[1:]:
+        if not seg:
+            continue
+        prefix = seg[0]
+        # Find which layer name corresponds to this prefix
+        for name, pfx in INCHI_LAYERS.items():
+            if pfx == prefix:
+                layer_contents[name] = seg
+                break
+
+    # Assemble requested layers in the order the user asked for them.
+    parts = [layer_contents[name] for name in layers if name in layer_contents]
+    return "/".join(parts)
+
+
+def smiles_to_inchi_layers(smiles: str, layers: Union[str, List[str]] = "all") -> str:
+    """
+    Convert a SMILES string to selected InChI layer(s) in one step.
+
+    Convenience wrapper around :func:`smiles_to_inchi` and
+    :func:`extract_inchi_layers`.  Useful for batch pipelines where
+    every molecule is to be represented by the same subset of layers.
+
+    Parameters
+    ----------
+    smiles : str
+        Input SMILES string
+    layers : str or List[str]
+        Layer name(s) to retain; see :func:`extract_inchi_layers`.
+        Use 'all' (default) to retain the full InChI (minus 'InChI='
+        prefix and version tag).
+
+    Returns
+    -------
+    str
+        Selected InChI layers, or empty string on failure.
+
+    Examples
+    --------
+    >>> smiles_to_inchi_layers("CCO", "connections")
+    'c1-2-3'
+    >>> smiles_to_inchi_layers("CCO", ["formula", "connections"])
+    'C2H6O/c1-2-3'
+    """
+    inchi = smiles_to_inchi(smiles)
+    if not inchi:
+        return ""
+    return extract_inchi_layers(inchi, layers)
+
+
 # ============================================================================
 # 1. Edit Distance Similarity
 # ============================================================================
@@ -859,8 +1078,418 @@ def lingo_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = 
     return similarity_sum / len(all_lingos)
 
 
+def lingo_tversky_similarity(
+    smiles1: str,
+    smiles2: str,
+    q: int = 4,
+    alpha: float = 0.9,
+    beta: float = 0.1,
+    preprocess: bool = True,
+) -> float:
+    """
+    Asymmetric Tversky similarity on LINGO (q-gram) count vectors.
+
+    The Tversky index generalises Tanimoto/Dice with two weights that
+    control how strongly missing features on each side are penalised:
+
+        S(A, B) = |A ∩ B| / (|A ∩ B| + alpha * |A \\ B| + beta * |B \\ A|)
+
+    where A, B are the multisets of q-grams of smiles1 and smiles2.
+    Intersection/difference are computed on multiset counts so that
+    repeated q-grams contribute appropriately.
+
+    Setting alpha = beta = 1 recovers the Tanimoto-style coefficient;
+    alpha = beta = 0.5 recovers Dice.  The default (alpha=0.9, beta=0.1)
+    is the "query-weighted" asymmetric Tversky used by Bajusz et al.
+    (2025) for nucleic-acid ligand screening, where smiles1 is treated
+    as the *query* (reference template) and smiles2 as the *database*
+    candidate: q-grams present in the query but missing in the database
+    are penalised more than q-grams present only in the database.
+
+    Parameters
+    ----------
+    smiles1 : str
+        Query (template/reference) SMILES string
+    smiles2 : str
+        Database/candidate SMILES string
+    q : int
+        LINGO length (default 4)
+    alpha : float
+        Weight applied to q-grams unique to the query (smiles1).
+        Default 0.9 (query-weighted).
+    beta : float
+        Weight applied to q-grams unique to the database (smiles2).
+        Default 0.1 (query-weighted).
+    preprocess : bool
+        Whether to preprocess SMILES before q-gram extraction.
+
+    Returns
+    -------
+    float
+        Tversky similarity in [0, 1].  Asymmetric when alpha != beta.
+
+    References
+    ----------
+    Tversky A. "Features of similarity." Psychological Review 84, 327–352 (1977).
+
+    Bajusz D., Rácz A., Stefaniak F. "Evaluation of single-template
+    ligand-based methods for the discovery of small-molecule nucleic
+    acid binders." Briefings in Bioinformatics, 2025.
+    """
+    lingos1 = get_lingos(smiles1, q, normalize_rings=True, preprocess=preprocess)
+    lingos2 = get_lingos(smiles2, q, normalize_rings=True, preprocess=preprocess)
+
+    if not lingos1 and not lingos2:
+        return 1.0
+    if not lingos1 or not lingos2:
+        return 0.0
+
+    # Multiset intersection and differences
+    intersection = 0
+    only1 = 0
+    only2 = 0
+
+    all_keys = set(lingos1) | set(lingos2)
+    for k in all_keys:
+        c1 = lingos1.get(k, 0)
+        c2 = lingos2.get(k, 0)
+        intersection += min(c1, c2)
+        only1 += max(c1 - c2, 0)
+        only2 += max(c2 - c1, 0)
+
+    denominator = intersection + alpha * only1 + beta * only2
+    if denominator == 0:
+        return 0.0
+    return intersection / denominator
+
+
+def lingo_dice_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True) -> float:
+    """
+    Sørensen–Dice coefficient on LINGO (q-gram) count vectors.
+
+    Equivalent to Tversky with alpha = beta = 0.5.  Compared to Tanimoto,
+    Dice weights shared q-grams more heavily and typically yields higher
+    values for moderately similar molecule pairs, which can improve
+    early-enrichment performance on some targets.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+        SMILES strings to compare.
+    q : int
+        LINGO length (default 4).
+    preprocess : bool
+        Whether to preprocess SMILES.
+
+    Returns
+    -------
+    float
+        Dice similarity in [0, 1].
+    """
+    return lingo_tversky_similarity(smiles1, smiles2, q=q, alpha=0.5, beta=0.5, preprocess=preprocess)
+
+
 # ============================================================================
-# 7 & 8. LINGO-based TF and TF-IDF Cosine Similarity
+# 7. Spectrum Kernel (fixed k, no ring normalization)
+# ============================================================================
+
+
+def spectrum_kernel_similarity(
+    smiles1: str,
+    smiles2: str,
+    k: int = 4,
+    coefficient: str = "tanimoto",
+    normalize_rings: bool = False,
+    preprocess: bool = True,
+) -> float:
+    """
+    Spectrum kernel similarity between two SMILES strings.
+
+    The spectrum kernel (Leslie, Eskin & Noble, 2002) represents each
+    sequence as a vector of counts of every k-mer, then compares two
+    sequences through an inner product (or a normalised coefficient).
+    It is the canonical fixed-k string kernel and the most widely
+    benchmarked alignment-free method in biological sequence work.
+
+    Differs from :func:`lingo_similarity` in two ways:
+
+    1. The similarity coefficient is a single inner-product-based
+       measure (Tanimoto / Dice / cosine) on the full count vector,
+       rather than an averaged per-q-gram agreement.
+    2. Ring digits are **not** normalised to '0' by default, preserving
+       ring-closure identity.  Set ``normalize_rings=True`` to match
+       the LINGO convention.
+
+    Parameters
+    ----------
+    smiles1 : str
+        First SMILES string
+    smiles2 : str
+        Second SMILES string
+    k : int
+        k-mer length (default 4).
+    coefficient : {'tanimoto', 'dice', 'cosine'}
+        Normalisation of the kernel inner product.
+    normalize_rings : bool
+        Whether to replace all ring-closure digits with '0'.
+    preprocess : bool
+        Whether to apply SMILES multi-character preprocessing.
+
+    Returns
+    -------
+    float
+        Normalised similarity in [0, 1].
+
+    References
+    ----------
+    Leslie C., Eskin E., Noble W. "The spectrum kernel: a string kernel
+    for SVM protein classification." PSB 2002, 564–575.
+    """
+    if preprocess:
+        smiles1 = preprocess_smiles(smiles1)
+        smiles2 = preprocess_smiles(smiles2)
+    if normalize_rings:
+        smiles1 = normalize_ring_numbers(smiles1)
+        smiles2 = normalize_ring_numbers(smiles2)
+
+    if len(smiles1) < k and len(smiles2) < k:
+        return 1.0 if smiles1 == smiles2 else 0.0
+    if len(smiles1) < k or len(smiles2) < k:
+        return 0.0
+
+    # Build k-mer count vectors
+    counts1: Counter = Counter(smiles1[i : i + k] for i in range(len(smiles1) - k + 1))
+    counts2: Counter = Counter(smiles2[i : i + k] for i in range(len(smiles2) - k + 1))
+
+    # Inner product, self-inner-products
+    dot = 0.0
+    for kmer, c in counts1.items():
+        if kmer in counts2:
+            dot += c * counts2[kmer]
+    norm1 = sum(c * c for c in counts1.values())
+    norm2 = sum(c * c for c in counts2.values())
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+
+    coef = coefficient.lower()
+    if coef == "cosine":
+        return dot / (np.sqrt(norm1) * np.sqrt(norm2))
+    if coef == "tanimoto":
+        denominator = norm1 + norm2 - dot
+        if denominator <= 0:
+            return 0.0
+        return dot / denominator
+    if coef == "dice":
+        denominator = norm1 + norm2
+        if denominator <= 0:
+            return 0.0
+        return 2.0 * dot / denominator
+    raise ValueError(f"Unknown coefficient: '{coefficient}'. " "Supported: 'tanimoto', 'dice', 'cosine'.")
+
+
+# ============================================================================
+# 8. Mismatch Kernel (spectrum-(k, m) kernel)
+# ============================================================================
+
+
+def _generate_mismatches(kmer: str, m: int, alphabet: str) -> List[str]:
+    """
+    Generate all strings at Hamming distance <= m from ``kmer``.
+
+    For small m (typically 1 or 2) and moderate k this is tractable;
+    the total number of mismatched strings is
+    sum(C(k, i) * (|alphabet| - 1)**i for i in 0..m).
+
+    Used internally by :func:`mismatch_kernel_similarity`.
+    """
+    if m < 0:
+        return []
+    results = {kmer}
+    current = {kmer}
+    for _ in range(m):
+        nxt = set()
+        for s in current:
+            for i in range(len(s)):
+                for ch in alphabet:
+                    if ch != s[i]:
+                        candidate = s[:i] + ch + s[i + 1 :]
+                        if candidate not in results:
+                            nxt.add(candidate)
+        results |= nxt
+        current = nxt
+        if not current:
+            break
+    return list(results)
+
+
+def mismatch_kernel_similarity(
+    smiles1: str,
+    smiles2: str,
+    k: int = 4,
+    m: int = 1,
+    coefficient: str = "tanimoto",
+    normalize_rings: bool = False,
+    preprocess: bool = True,
+    alphabet: Optional[str] = None,
+) -> float:
+    """
+    Mismatch (spectrum-(k, m)) kernel similarity between two SMILES.
+
+    The mismatch kernel (Leslie, Eskin, Weston & Noble, 2004) extends the
+    spectrum kernel so that a pair of k-mers is considered a match when
+    they differ in at most *m* positions (Hamming distance <= m).  For
+    SMILES this captures the intuition that "CCCCN" and "CCCCO" encode
+    nearly the same molecule (one-atom swap), which pure q-gram methods
+    score very low.
+
+    Implementation: each k-mer in *smiles1* contributes to the inner
+    product against every k-mer in *smiles2* that lies within the
+    m-mismatch neighbourhood.  For m = 0 this reduces to the exact
+    spectrum kernel.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+        SMILES strings to compare.
+    k : int
+        k-mer length (default 4).
+    m : int
+        Maximum number of allowed mismatches per k-mer (default 1).
+    coefficient : {'tanimoto', 'dice', 'cosine'}
+        Normalisation of the kernel inner product.
+    normalize_rings : bool
+        Whether to replace all ring-closure digits with '0'.
+    preprocess : bool
+        Whether to apply SMILES multi-character preprocessing.
+    alphabet : str, optional
+        Alphabet used to enumerate mismatches.  If not given, the union
+        of characters that actually appear in the two preprocessed
+        SMILES strings is used — this keeps the neighbourhood small
+        while still capturing every biologically meaningful substitution.
+
+    Returns
+    -------
+    float
+        Normalised similarity in [0, 1].
+
+    Notes
+    -----
+    Computational cost grows with the neighbourhood size, roughly
+    ``O(|S| * C(k, m) * (|alphabet|-1)**m)``.  For SMILES with
+    alphabets of ~30–50 symbols, m = 1 (and k <= 5) is practical;
+    m = 2 is expensive and rarely needed.
+
+    References
+    ----------
+    Leslie C., Eskin E., Weston J., Noble W. "Mismatch string kernels
+    for discriminative protein classification." Bioinformatics 20,
+    467–476 (2004).
+    """
+    if preprocess:
+        smiles1 = preprocess_smiles(smiles1)
+        smiles2 = preprocess_smiles(smiles2)
+    if normalize_rings:
+        smiles1 = normalize_ring_numbers(smiles1)
+        smiles2 = normalize_ring_numbers(smiles2)
+
+    if m < 0:
+        raise ValueError("m must be >= 0")
+    if m == 0:
+        # Fall back to the plain spectrum kernel — same semantics, faster path.
+        return spectrum_kernel_similarity(smiles1, smiles2, k=k, coefficient=coefficient, normalize_rings=False, preprocess=False)
+
+    if len(smiles1) < k and len(smiles2) < k:
+        return 1.0 if smiles1 == smiles2 else 0.0
+    if len(smiles1) < k or len(smiles2) < k:
+        return 0.0
+
+    if alphabet is None:
+        alphabet = "".join(sorted(set(smiles1) | set(smiles2)))
+    if len(alphabet) < 2:
+        # Degenerate: no mismatches possible, reduces to spectrum kernel
+        return spectrum_kernel_similarity(smiles1, smiles2, k=k, coefficient=coefficient, normalize_rings=False, preprocess=False)
+
+    # Build exact k-mer counts
+    counts1 = Counter(smiles1[i : i + k] for i in range(len(smiles1) - k + 1))
+    counts2 = Counter(smiles2[i : i + k] for i in range(len(smiles2) - k + 1))
+
+    # Expand each k-mer to its m-mismatch neighbourhood.  Each (neighbour,
+    # source_count) contributes to the feature vector indexed by ``neighbour``.
+    def _expanded(counts: Counter) -> Counter:
+        exp: Counter = Counter()
+        for kmer, c in counts.items():
+            for nb in _generate_mismatches(kmer, m, alphabet):
+                exp[nb] += c
+        return exp
+
+    exp1 = _expanded(counts1)
+    exp2 = _expanded(counts2)
+
+    # Inner products in the expanded feature space
+    dot = 0.0
+    for kmer, c in exp1.items():
+        if kmer in exp2:
+            dot += c * exp2[kmer]
+    norm1 = sum(c * c for c in exp1.values())
+    norm2 = sum(c * c for c in exp2.values())
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+
+    coef = coefficient.lower()
+    if coef == "cosine":
+        return dot / (np.sqrt(norm1) * np.sqrt(norm2))
+    if coef == "tanimoto":
+        denominator = norm1 + norm2 - dot
+        if denominator <= 0:
+            return 0.0
+        return dot / denominator
+    if coef == "dice":
+        denominator = norm1 + norm2
+        if denominator <= 0:
+            return 0.0
+        return 2.0 * dot / denominator
+    raise ValueError(f"Unknown coefficient: '{coefficient}'. " "Supported: 'tanimoto', 'dice', 'cosine'.")
+
+
+# ============================================================================
+# 9. Longest Common Substring similarity (normalised, interpretable)
+# ============================================================================
+
+
+def longest_common_substring_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float:
+    """
+    Normalised Longest Common *Substring* (contiguous) similarity.
+
+    Returns ``len(LCSubstr)^2 / (len(s1) * len(s2))``, analogous to NLCS
+    but requiring the common part to be *contiguous* (a substring, not a
+    subsequence).  This exposes the longest-common-substring logic from
+    :func:`mclcsn_length` — already used internally by :func:`clcs_similarity` —
+    as a stand-alone method, because the contiguous shared stretch is
+    often directly interpretable as a shared scaffold-ish fragment.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+        SMILES strings to compare.
+    preprocess : bool
+        Whether to apply SMILES multi-character preprocessing.
+
+    Returns
+    -------
+    float
+        Similarity in [0, 1].
+    """
+    if preprocess:
+        smiles1 = preprocess_smiles(smiles1)
+        smiles2 = preprocess_smiles(smiles2)
+    if not smiles1 or not smiles2:
+        return 0.0 if (smiles1 or smiles2) else 1.0
+    lcs = mclcsn_length(smiles1, smiles2)
+    return (lcs * lcs) / (len(smiles1) * len(smiles2))
+
+
+# ============================================================================
+# 10. LINGO-based TF and TF-IDF Cosine Similarity
 # ============================================================================
 
 
@@ -1101,7 +1730,12 @@ class SMILESTokenizer:
 
 
 def smiles_tfidf_similarity(
-    smiles1: str, smiles2: str, corpus: List[str] = None, ngram_range: Tuple[int, int] = (1, 2), vectorizer=None
+    smiles1: str,
+    smiles2: str,
+    corpus: List[str] = None,
+    ngram_range: Tuple[int, int] = (1, 2),
+    vectorizer=None,
+    preprocess: bool = False,
 ) -> float:
     """
     TF-IDF cosine similarity with chemically-aware tokenization.
@@ -1110,6 +1744,12 @@ def smiles_tfidf_similarity(
     stereochemistry markers (@@) are treated as indivisible tokens.
     When a pre-fitted vectorizer is supplied it is reused directly,
     which is strongly recommended for batch/matrix calculations.
+
+    Note: the ``preprocess`` argument is accepted for API compatibility
+    with other similarity functions but is ignored — this method relies
+    on the chemical tokenizer rather than on character substitution, so
+    it works correctly on both SMILES and InChI inputs without any
+    additional preprocessing step.
 
     Parameters
     ----------
@@ -1345,7 +1985,7 @@ AVAILABLE_METHODS = {
     "nlcs": {"function": nlcs_similarity, "description": "Normalized Longest Common Subsequence", "params": {}},
     "clcs": {"function": clcs_similarity, "description": "Combined LCS models", "params": {}},
     "substring": {
-        "function": lambda s1, s2: substring_kernel_similarity(s1, s2, normalized=True),
+        "function": lambda s1, s2, **kw: substring_kernel_similarity(s1, s2, normalized=True, **kw),
         "description": "Substring kernel (normalized)",
         "params": {},
     },
@@ -1357,19 +1997,82 @@ AVAILABLE_METHODS = {
     },
     "smifp_tanimoto": {"function": smifp_similarity_tanimoto, "description": "SMILES fingerprint 34D with Tanimoto", "params": {}},
     "smifp38_cbd": {
-        "function": lambda s1, s2: smifp_similarity_cityblock(s1, s2, chars=SMIFP_CHARS_38),
+        "function": lambda s1, s2, **kw: smifp_similarity_cityblock(s1, s2, chars=SMIFP_CHARS_38, **kw),
         "description": "SMILES fingerprint 38D with City Block Distance (Manhattan)",
         "params": {},
         "requires": "scipy",
     },
     "smifp38_tanimoto": {
-        "function": lambda s1, s2: smifp_similarity_tanimoto(s1, s2, chars=SMIFP_CHARS_38),
+        "function": lambda s1, s2, **kw: smifp_similarity_tanimoto(s1, s2, chars=SMIFP_CHARS_38, **kw),
         "description": "SMILES fingerprint 38D with Tanimoto",
         "params": {},
     },
     "lingo": {"function": lingo_similarity, "description": "LINGO similarity (q=4)", "params": {"q": 4}},
-    "lingo3": {"function": lambda s1, s2: lingo_similarity(s1, s2, q=3), "description": "LINGO similarity (q=3)", "params": {"q": 3}},
-    "lingo5": {"function": lambda s1, s2: lingo_similarity(s1, s2, q=5), "description": "LINGO similarity (q=5)", "params": {"q": 5}},
+    "lingo3": {
+        "function": lambda s1, s2, **kw: lingo_similarity(s1, s2, q=3, **kw),
+        "description": "LINGO similarity (q=3)",
+        "params": {"q": 3},
+    },
+    "lingo5": {
+        "function": lambda s1, s2, **kw: lingo_similarity(s1, s2, q=5, **kw),
+        "description": "LINGO similarity (q=5)",
+        "params": {"q": 5},
+    },
+    "lingo_tversky": {
+        "function": lingo_tversky_similarity,
+        "description": "Asymmetric Tversky on LINGO q-grams (q=4, alpha=0.9, beta=0.1) — query-weighted",
+        "params": {"q": 4, "alpha": 0.9, "beta": 0.1},
+    },
+    "lingo_tversky_sym": {
+        "function": lambda s1, s2, **kw: lingo_tversky_similarity(s1, s2, q=4, alpha=0.5, beta=0.5, **kw),
+        "description": "Symmetric Tversky (alpha=beta=0.5, equivalent to Dice) on LINGO q-grams",
+        "params": {"q": 4, "alpha": 0.5, "beta": 0.5},
+    },
+    "lingo_dice": {
+        "function": lingo_dice_similarity,
+        "description": "Sørensen-Dice coefficient on LINGO q-gram counts (q=4)",
+        "params": {"q": 4},
+    },
+    "spectrum": {
+        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=4, coefficient="tanimoto", **kw),
+        "description": "Spectrum kernel (k=4, Tanimoto) — classical fixed-k string kernel",
+        "params": {"k": 4, "coefficient": "tanimoto"},
+    },
+    "spectrum3": {
+        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=3, coefficient="tanimoto", **kw),
+        "description": "Spectrum kernel (k=3, Tanimoto)",
+        "params": {"k": 3, "coefficient": "tanimoto"},
+    },
+    "spectrum5": {
+        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=5, coefficient="tanimoto", **kw),
+        "description": "Spectrum kernel (k=5, Tanimoto)",
+        "params": {"k": 5, "coefficient": "tanimoto"},
+    },
+    "spectrum_cosine": {
+        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=4, coefficient="cosine", **kw),
+        "description": "Spectrum kernel (k=4, cosine normalisation)",
+        "params": {"k": 4, "coefficient": "cosine"},
+    },
+    "mismatch": {
+        "function": lambda s1, s2, **kw: mismatch_kernel_similarity(s1, s2, k=4, m=1, coefficient="tanimoto", **kw),
+        "description": "Mismatch (spectrum-(k,m)) kernel (k=4, m=1, Tanimoto) — tolerates 1 atom swap",
+        "params": {"k": 4, "m": 1, "coefficient": "tanimoto"},
+    },
+    "mismatch3": {
+        "function": lambda s1, s2, **kw: mismatch_kernel_similarity(s1, s2, k=3, m=1, coefficient="tanimoto", **kw),
+        "description": "Mismatch kernel (k=3, m=1, Tanimoto)",
+        "params": {"k": 3, "m": 1, "coefficient": "tanimoto"},
+    },
+    "mismatch5": {
+        "function": lambda s1, s2, **kw: mismatch_kernel_similarity(s1, s2, k=5, m=1, coefficient="tanimoto", **kw),
+        "description": "Mismatch kernel (k=5, m=1, Tanimoto)",
+        "params": {"k": 5, "m": 1, "coefficient": "tanimoto"},
+    },
+    "lcs_substring": {
+        "function": longest_common_substring_similarity,
+        "description": "Normalised Longest Common Substring (contiguous) — LCSubstr²/(len1×len2)",
+        "params": {},
+    },
     "smiles_tfidf": {
         "function": smiles_tfidf_similarity,
         "description": "TF-IDF cosine similarity with chemical tokenization (ngram (1,2))",
@@ -1377,19 +2080,19 @@ AVAILABLE_METHODS = {
         "requires": "sklearn",
     },
     "smiles_tfidf13": {
-        "function": lambda s1, s2: smiles_tfidf_similarity(s1, s2, ngram_range=(1, 3)),
+        "function": lambda s1, s2, **kw: smiles_tfidf_similarity(s1, s2, ngram_range=(1, 3), **kw),
         "description": "TF-IDF cosine similarity with chemical tokenization (ngram (1,3))",
         "params": {"ngram_range": (1, 3)},
         "requires": "sklearn",
     },
     "smiles_tfidf23": {
-        "function": lambda s1, s2: smiles_tfidf_similarity(s1, s2, ngram_range=(2, 3)),
+        "function": lambda s1, s2, **kw: smiles_tfidf_similarity(s1, s2, ngram_range=(2, 3), **kw),
         "description": "TF-IDF cosine similarity with chemical tokenization (ngram (2,3))",
         "params": {"ngram_range": (2, 3)},
         "requires": "sklearn",
     },
     "smiles_tfidf14": {
-        "function": lambda s1, s2: smiles_tfidf_similarity(s1, s2, ngram_range=(1, 4)),
+        "function": lambda s1, s2, **kw: smiles_tfidf_similarity(s1, s2, ngram_range=(1, 4), **kw),
         "description": "TF-IDF cosine similarity with chemical tokenization (ngram (1,4))",
         "params": {"ngram_range": (1, 4)},
         "requires": "sklearn",
@@ -1473,22 +2176,37 @@ def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", **k
     method : str
         Similarity method name
     **kwargs : dict
-        Additional arguments for the similarity function
+        Additional arguments for the similarity function.  ``preprocess``
+        is passed through only to functions whose signature accepts it;
+        unknown kwargs are silently ignored.  Set ``preprocess=False``
+        when the inputs have already been transformed (e.g. to InChI)
+        so that SMILES-oriented character substitution does not corrupt
+        them.
 
     Returns
     -------
     np.ndarray
         n x n similarity matrix
     """
+    import inspect
+
     n = len(smiles_list)
     sim_matrix = np.zeros((n, n))
 
     sim_func = get_similarity_function(method)
 
+    # Filter kwargs to those the function actually accepts.
+    try:
+        params = inspect.signature(sim_func).parameters
+        accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        filtered_kwargs = kwargs if accepts_kwargs else {k: v for k, v in kwargs.items() if k in params}
+    except (TypeError, ValueError):
+        filtered_kwargs = {}
+
     for i in range(n):
         sim_matrix[i, i] = 1.0  # Self-similarity
         for j in range(i + 1, n):
-            sim = sim_func(smiles_list[i], smiles_list[j], **kwargs)
+            sim = sim_func(smiles_list[i], smiles_list[j], **filtered_kwargs)
             sim_matrix[i, j] = sim
             sim_matrix[j, i] = sim
 
@@ -1508,22 +2226,38 @@ def compute_cross_similarity_matrix(templates: List[str], library: List[str], me
     method : str
         Similarity method name
     **kwargs : dict
-        Additional arguments for the similarity function
+        Additional arguments for the similarity function.  ``preprocess``
+        is passed through only to functions whose signature accepts it;
+        unknown kwargs are silently ignored.  Set ``preprocess=False``
+        when the inputs have already been transformed (e.g. to InChI)
+        so that SMILES-oriented character substitution does not corrupt
+        them.
 
     Returns
     -------
     np.ndarray
         len(library) x len(templates) similarity matrix
     """
+    import inspect
+
     n_lib = len(library)
     n_templates = len(templates)
     sim_matrix = np.zeros((n_lib, n_templates))
 
     sim_func = get_similarity_function(method)
 
+    # Filter kwargs to those the function actually accepts.  Lambdas in
+    # the registry don't expose kwargs; in that case we drop them all.
+    try:
+        params = inspect.signature(sim_func).parameters
+        accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        filtered_kwargs = kwargs if accepts_kwargs else {k: v for k, v in kwargs.items() if k in params}
+    except (TypeError, ValueError):
+        filtered_kwargs = {}
+
     for i, lib_smiles in enumerate(library):
         for j, template_smiles in enumerate(templates):
-            sim = sim_func(lib_smiles, template_smiles, **kwargs)
+            sim = sim_func(lib_smiles, template_smiles, **filtered_kwargs)
             sim_matrix[i, j] = sim
 
     return sim_matrix
@@ -1870,8 +2604,13 @@ Input formats:
   - .csv file: Comma-separated with header
   - .tsv file: Tab-separated with header
 
-Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto, 
-                   lingo, lingo3, lingo5
+Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
+                   smifp38_cbd, smifp38_tanimoto, lingo, lingo3, lingo5,
+                   lingo_tversky, lingo_tversky_sym, lingo_dice,
+                   spectrum, spectrum3, spectrum5, spectrum_cosine,
+                   mismatch, mismatch3, mismatch5, lcs_substring,
+                   smiles_tfidf, smiles_tfidf13, smiles_tfidf23, smiles_tfidf14,
+                   damerau_levenshtein, jaro, jaro_winkler, hamming, ncd
         """,
     )
 
@@ -1939,6 +2678,19 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
         help='Convert SMILES to InChI (stripping the "InChI=" prefix) before '
         "comparison (requires rdkit). Useful for representation-independent "
         "similarity; implies --canonicalize.",
+    )
+
+    parser.add_argument(
+        "--inchi-layer",
+        type=str,
+        default="all",
+        metavar="LAYER[,LAYER,...]",
+        help="When --inchi is used, restrict comparison to selected InChI layer(s). "
+        "Comma-separated list. Supported layers: formula, connections, hydrogens, "
+        "charge, protons, stereo_db, stereo_tet, stereo_parity, stereo_type, "
+        "isotope, fixedH, reconnected. Default: 'all' (full InChI minus version tag). "
+        "Examples: --inchi-layer connections  |  "
+        "--inchi-layer formula,connections  |  --inchi-layer connections,hydrogens",
     )
 
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress information")
@@ -2047,11 +2799,30 @@ def main():
             print("Warning: --canonicalize/--inchi requested but RDKit is not installed. " "Install with: pip install rdkit", file=sys.stderr)
         else:
             if args.inchi:
-                if args.verbose:
-                    print("Converting SMILES to InChI (stripping 'InChI=' prefix)...")
+                # Parse and validate layer selection
+                layers_arg = [s.strip() for s in args.inchi_layer.split(",") if s.strip()]
+                if len(layers_arg) == 1 and layers_arg[0] == "all":
+                    layers_for_transform: Union[str, List[str]] = "all"
+                else:
+                    # Validate against known layers
+                    for _l in layers_arg:
+                        if _l != "all" and _l not in INCHI_LAYERS:
+                            print(
+                                f"Error: unknown InChI layer '{_l}'. " f"Available: {list(INCHI_LAYERS.keys())}",
+                                file=sys.stderr,
+                            )
+                            sys.exit(1)
+                    layers_for_transform = layers_arg
 
-                def _transform(s):
-                    return smiles_to_inchi(s) or s
+                if args.verbose:
+                    if layers_for_transform == "all":
+                        print("Converting SMILES to InChI (stripping 'InChI=' prefix and version tag)...")
+                    else:
+                        print(f"Converting SMILES to InChI layers: {layers_for_transform}")
+
+                def _transform(s, _layers=layers_for_transform):
+                    out = smiles_to_inchi_layers(s, _layers)
+                    return out or s
 
             else:
                 if args.verbose:
@@ -2085,7 +2856,13 @@ def main():
             total_comparisons = len(library) * len(templates)
             print(f"  Total comparisons: {total_comparisons:,}")
 
-        sim_matrix = compute_cross_similarity_matrix(template_smiles, library_smiles, method=method)
+        # When inputs have been converted to InChI, disable SMILES-oriented
+        # character substitution in similarity functions that support it.
+        # SMILES preprocessing would otherwise collapse 'Cl' -> 'L' in the
+        # formula layer of the InChI, corrupting the layered structure.
+        extra_kwargs = {"preprocess": False} if args.inchi else {}
+
+        sim_matrix = compute_cross_similarity_matrix(template_smiles, library_smiles, method=method, **extra_kwargs)
 
         # Write output
         if args.verbose:
@@ -2174,5 +2951,6 @@ if __name__ == "__main__":
     # If no arguments provided, run demo
     if len(sys.argv) == 1:
         demo()
+
     else:
         main()

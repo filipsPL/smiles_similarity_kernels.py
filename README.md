@@ -7,16 +7,18 @@ Python implementation of SMILES-based compound similarity functions for ligand-b
 
 ## Overview
 
-This module provides **21 similarity methods** for comparing chemical compounds represented as SMILES strings (or InChI strings). It can be used as a Python library or run directly from the command line.
+This module provides **31 similarity methods** for comparing chemical compounds represented as SMILES strings (or InChI strings). It can be used as a Python library or run directly from the command line.
 
 **Key extensions beyond the original Java implementation:**
 - Corrected formulas for NLCS, Edit, LINGO edge cases, and SMIfp
 - Expanded multi-character element encoding covering stereochemistry (`@@`, `@TH1`…), rare metals, and lanthanides
 - Regex-based preprocessing (safe longest-match, no sequential-replace corruption)
 - SMILES canonicalization via RDKit (`--canonicalize`)
-- InChI conversion (`--inchi`) for representation-independent comparison
+- InChI conversion (`--inchi`) for representation-independent comparison, with optional per-layer selection (`--inchi-layer formula,connections,...`)
+- Layer-respecting InChI preprocessing (`preprocess_inchi`, `extract_inchi_layers`, `smiles_to_inchi_layers`) that does **not** mangle the formula layer
 - TF-IDF cosine similarity with chemically-aware tokenization (`SMILESTokenizer`)
 - Five additional string metrics: Damerau-Levenshtein, Jaro, Jaro-Winkler, Hamming, and Normalized Compression Distance (NCD)
+- **New in this release:** classical spectrum kernel, mismatch `(k, m)` kernel, query-weighted asymmetric Tversky on LINGOs, Sørensen-Dice on LINGOs, and stand-alone longest-common-substring similarity
 
 ## Citation
 
@@ -26,7 +28,7 @@ Based on methods described in:
 
 Original Java implementation: https://github.com/hkmztrk/SMILESbasedSimilarityKernels
 
-Cite THIS implementation using DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18457244.svg)](https://doi.org/10.5281/zenodo.18457244)
+Cite **THIS** implementation using DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18457244.svg)](https://doi.org/10.5281/zenodo.18457244)
 
 ## Installation
 
@@ -45,16 +47,34 @@ See `requirements.txt` for version constraints.
 ### As a Python Module
 
 ```python
-from smiles_similarity_kernels import lingo_similarity, edit_similarity, nlcs_similarity
+from smiles_similarity_kernels import (
+    lingo_similarity,
+    edit_similarity,
+    nlcs_similarity,
+    # new in this release:
+    lingo_tversky_similarity,
+    spectrum_kernel_similarity,
+    mismatch_kernel_similarity,
+)
 
 smiles1 = "CCO"     # ethanol
 smiles2 = "CCCO"    # propanol
 
-sim = lingo_similarity(smiles1, smiles2, q=4)
-print(f"LINGO similarity: {sim:.3f}")
+print(f"LINGO  (q=4):             {lingo_similarity(smiles1, smiles2, q=4):.3f}")
+print(f"Edit:                     {edit_similarity(smiles1, smiles2):.3f}")
 
-sim = edit_similarity(smiles1, smiles2)
-print(f"Edit similarity: {sim:.3f}")
+# Query-weighted asymmetric Tversky on LINGO q-grams (α=0.9, β=0.1).
+# The first argument is treated as the query (template), the second as
+# the database candidate — swapping them will in general give different
+# values.  Motivated by Bajusz et al. (2025) for nucleic-acid screening.
+print(f"Tversky (query=s1):       {lingo_tversky_similarity(smiles1, smiles2):.3f}")
+print(f"Tversky (query=s2):       {lingo_tversky_similarity(smiles2, smiles1):.3f}")
+
+# Classical spectrum kernel (Leslie et al. 2002) with k=4, Tanimoto
+print(f"Spectrum (k=4):           {spectrum_kernel_similarity(smiles1, smiles2, k=4):.3f}")
+
+# Mismatch kernel — tolerates up to m atom substitutions per k-mer
+print(f"Mismatch (k=4, m=1):      {mismatch_kernel_similarity(smiles1, smiles2, k=4, m=1):.3f}")
 ```
 
 ### Command Line
@@ -64,6 +84,20 @@ print(f"Edit similarity: {sim:.3f}")
 python smiles_similarity_kernels.py \
     templates.smi library.smi output.csv --method lingo
 
+# Use all available methods (creates one output file per method) (see example folder for outputs)
+python smiles_similarity_kernels.py examples/templates.smi examples/database.smi \
+    examples/outputs/output.csv --all-methods
+
+# Query-weighted Tversky on LINGOs (recommended for screening)
+python smiles_similarity_kernels.py \
+    templates.smi library.smi output.csv --method lingo_tversky
+
+# Classical spectrum kernel (k=4) and mismatch kernel (k=4, m=1)
+python smiles_similarity_kernels.py \
+    templates.smi library.smi output.csv --method spectrum
+python smiles_similarity_kernels.py \
+    templates.smi library.smi output.csv --method mismatch
+
 # Canonicalize SMILES before comparison (requires rdkit)
 python smiles_similarity_kernels.py \
     templates.smi library.smi output.csv --method lingo --canonicalize
@@ -72,9 +106,11 @@ python smiles_similarity_kernels.py \
 python smiles_similarity_kernels.py \
     templates.smi library.smi output.csv --method edit --inchi
 
-# Use all available methods (creates one output file per method)
+# Compare using only the connection table of the InChI (topology only)
 python smiles_similarity_kernels.py \
-    templates.smi library.smi output.csv --all-methods
+    templates.smi library.smi output.csv \
+    --method lingo --inchi --inchi-layer connections
+
 
 # List available methods
 python smiles_similarity_kernels.py --list-methods
@@ -107,6 +143,35 @@ Name,Similarity_0054-0090,Similarity_0133-0086
 | `lingo3`           | `lingo_similarity`            | LINGO q-gram Tanimoto, q=3                                                    | —        |
 | `lingo5`           | `lingo_similarity`            | LINGO q-gram Tanimoto, q=5                                                    | —        |
 
+### LINGO variants with alternative coefficients (extensions)
+
+Motivated by Bajusz et al. (2025) where query-weighted Tversky consistently outperformed Tanimoto on nucleic-acid targets.
+
+| CLI name            | Function                   | Description                                                                  | Requires |
+| ------------------- | -------------------------- | ---------------------------------------------------------------------------- | -------- |
+| `lingo_tversky`     | `lingo_tversky_similarity` | **Asymmetric Tversky on LINGO q-grams** (q=4, α=0.9, β=0.1) — query-weighted | —        |
+| `lingo_tversky_sym` | `lingo_tversky_similarity` | Symmetric Tversky (α=β=0.5, equivalent to Dice) on LINGO q-grams             | —        |
+| `lingo_dice`        | `lingo_dice_similarity`    | Sørensen–Dice coefficient on LINGO q-gram counts (q=4)                       | —        |
+
+> **Asymmetry note:** `lingo_tversky` treats the *first* argument as the query (template) and the *second* as the database candidate. Swapping arguments will in general yield different values. This mirrors the "query-weighted Tversky" convention used in Bajusz et al. (2025).
+
+### Spectrum and mismatch kernels (extensions)
+
+Classical string-kernel methods from the biological-sequence literature, ported to SMILES. Unlike `lingo`/`substring`, these return a single inner-product-based coefficient (Tanimoto, Dice, or cosine) over the full k-mer count vector.
+
+| CLI name          | Function                              | Description                                                                   | Requires |
+| ----------------- | ------------------------------------- | ----------------------------------------------------------------------------- | -------- |
+| `spectrum`        | `spectrum_kernel_similarity`          | **Spectrum kernel** (Leslie et al. 2002), k=4, Tanimoto                       | —        |
+| `spectrum3`       | `spectrum_kernel_similarity`          | Spectrum kernel, k=3, Tanimoto                                                | —        |
+| `spectrum5`       | `spectrum_kernel_similarity`          | Spectrum kernel, k=5, Tanimoto                                                | —        |
+| `spectrum_cosine` | `spectrum_kernel_similarity`          | Spectrum kernel, k=4, cosine normalisation                                    | —        |
+| `mismatch`        | `mismatch_kernel_similarity`          | **Mismatch kernel** (Leslie et al. 2004), k=4, m=1 — tolerates 1-atom swaps   | —        |
+| `mismatch3`       | `mismatch_kernel_similarity`          | Mismatch kernel, k=3, m=1                                                     | —        |
+| `mismatch5`       | `mismatch_kernel_similarity`          | Mismatch kernel, k=5, m=1                                                     | —        |
+| `lcs_substring`   | `longest_common_substring_similarity` | Normalised Longest Common **Substring** (contiguous): LCSubstr² / (len1·len2) | —        |
+
+> **Mismatch cost note:** the neighbourhood size grows roughly as `C(k, m) * (|alphabet|-1)^m`. For SMILES alphabets of ~30–50 symbols, m=1 with k ≤ 5 is practical; m=2 is expensive and rarely useful.
+
 ### TF-IDF (extensions)
 
 | CLI name         | Function                  | Description                                                      | Requires     |
@@ -129,6 +194,7 @@ The `SMILESTokenizer` treats multi-character atoms (`Cl`, `Br`, `Si`, …) and `
 | `ncd`                 | `ncd_similarity`                 | Normalized Compression Distance via gzip; universal, parameter-free | —         |
 
 > **NCD note:** compression-based similarity is semantically unaware of chemistry — it detects string-level patterns, not structural features. Best used with `--canonicalize` and for near-duplicate detection or benchmarking. See source docstring for a full assessment.
+
 
 ## SMILES Preprocessing
 
@@ -156,6 +222,70 @@ smiles_to_inchi("CCO")       # → '1S/C2H6O/c1-2-3/h3H,2H2,1H3'  (no 'InChI=' p
 ```
 
 CLI flags: `--canonicalize` and `--inchi`.
+
+### InChI layer extraction
+
+InChI strings are **layered**: `<version>/<formula>/c<connections>/h<H>/q<charge>/...`. The SMILES-oriented `preprocess_smiles` must **not** be applied to InChI because it would corrupt the formula layer (e.g. `C6H5Cl` → `C6H5L`, which destroys the element-count encoding). The library therefore provides a dedicated set of InChI helpers:
+
+```python
+from smiles_similarity_kernels import (
+    preprocess_inchi,
+    extract_inchi_layers,
+    smiles_to_inchi_layers,
+    INCHI_LAYERS,
+)
+
+# Strip 'InChI=' and '1S/' version tag; keep layer separators
+preprocess_inchi("InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3")
+# → 'C2H6O/c1-2-3/h3H,2H2,1H3'
+
+# Select a single layer
+extract_inchi_layers("InChI=1S/C9H8O4/c1-6(10)13-...", "connections")
+# → 'c1-6(10)13-...'
+
+# Select multiple layers (order is preserved)
+extract_inchi_layers(inchi, ["formula", "connections"])
+# → 'C9H8O4/c1-6(10)13-...'
+
+# One-shot: SMILES → InChI-layer subset
+smiles_to_inchi_layers("CC(=O)Oc1ccccc1C(=O)O", ["formula", "connections"])
+# → 'C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12'
+```
+
+Supported layer names (keys of `INCHI_LAYERS`):
+
+| Name            | Prefix | Content                           |
+| --------------- | ------ | --------------------------------- |
+| `formula`       | —      | Molecular formula (e.g. `C9H8O4`) |
+| `connections`   | `c`    | Atom-connection table (topology)  |
+| `hydrogens`     | `h`    | Hydrogen layer                    |
+| `charge`        | `q`    | Net charge                        |
+| `protons`       | `p`    | Mobile-proton layer               |
+| `stereo_db`     | `b`    | Double-bond stereochemistry       |
+| `stereo_tet`    | `t`    | Tetrahedral stereochemistry       |
+| `stereo_parity` | `m`    | Parity layer                      |
+| `stereo_type`   | `s`    | Stereo type (abs/rel/rac)         |
+| `isotope`       | `i`    | Isotope layer                     |
+| `fixedH`        | `f`    | Fixed-H (non-standard InChI)      |
+| `reconnected`   | `r`    | Reconnected-metals layer          |
+
+The CLI mirrors this with `--inchi-layer`:
+
+```bash
+# Full InChI (default)
+python smiles_similarity_kernels.py templates.smi library.smi out.csv \
+    --method lingo --inchi
+
+# Compare using only the connection table (topology, no elements/stereochemistry)
+python smiles_similarity_kernels.py templates.smi library.smi out.csv \
+    --method lingo --inchi --inchi-layer connections
+
+# Formula + connections (most discriminating combination without stereochemistry)
+python smiles_similarity_kernels.py templates.smi library.smi out.csv \
+    --method lingo --inchi --inchi-layer formula,connections
+```
+
+> **Design note:** when `--inchi` is active the CLI automatically sets `preprocess=False` on similarity functions that support it, so that no SMILES-style character substitution is applied to the InChI string. If you call similarity functions directly with InChI input from Python, pass `preprocess=False` explicitly.
 
 ## Batch Processing
 
@@ -201,22 +331,23 @@ mol2,0.23400,0.89100
 python smiles_similarity_kernels.py TEMPLATES LIBRARY OUTPUT [OPTIONS]
 ```
 
-| Option                        | Description                                                        |
-| ----------------------------- | ------------------------------------------------------------------ |
-| `--method METHOD`             | Similarity method (default: `lingo`)                               |
-| `--all-methods`               | Run all methods; output named `METHOD_output.csv`                  |
-| `--list-methods`              | Print all available methods and exit                               |
-| `--canonicalize`              | Canonicalize SMILES with RDKit before comparison                   |
-| `--inchi`                     | Convert SMILES to InChI (strips `InChI=` prefix) before comparison |
-| `--verbose`, `-v`             | Print progress                                                     |
-| `--templates-smiles-col COL`  | SMILES column name/index in templates file                         |
-| `--templates-name-col COL`    | Name column in templates file                                      |
-| `--templates-delimiter DELIM` | Delimiter for templates file                                       |
-| `--templates-no-header`       | Templates file has no header                                       |
-| `--database-smiles-col COL`   | SMILES column in database file                                     |
-| `--database-name-col COL`     | Name column in database file                                       |
-| `--database-delimiter DELIM`  | Delimiter for database file                                        |
-| `--database-no-header`        | Database file has no header                                        |
+| Option                        | Description                                                                                                                                         |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--method METHOD`             | Similarity method (default: `lingo`)                                                                                                                |
+| `--all-methods`               | Run all methods; output named `METHOD_output.csv`                                                                                                   |
+| `--list-methods`              | Print all available methods and exit                                                                                                                |
+| `--canonicalize`              | Canonicalize SMILES with RDKit before comparison                                                                                                    |
+| `--inchi`                     | Convert SMILES to InChI (strips `InChI=` prefix) before comparison                                                                                  |
+| `--inchi-layer LAYER[,...]`   | When `--inchi` is used, restrict to selected InChI layer(s). Comma-separated. Default: `all`. See [InChI layer extraction](#inchi-layer-extraction) |
+| `--verbose`, `-v`             | Print progress                                                                                                                                      |
+| `--templates-smiles-col COL`  | SMILES column name/index in templates file                                                                                                          |
+| `--templates-name-col COL`    | Name column in templates file                                                                                                                       |
+| `--templates-delimiter DELIM` | Delimiter for templates file                                                                                                                        |
+| `--templates-no-header`       | Templates file has no header                                                                                                                        |
+| `--database-smiles-col COL`   | SMILES column in database file                                                                                                                      |
+| `--database-name-col COL`     | Name column in database file                                                                                                                        |
+| `--database-delimiter DELIM`  | Delimiter for database file                                                                                                                         |
+| `--database-no-header`        | Database file has no header                                                                                                                         |
 
 ## Differences from Java Implementation
 
@@ -238,11 +369,15 @@ python smiles_similarity_kernels.py TEMPLATES LIBRARY OUTPUT [OPTIONS]
 
 ## Performance
 
-| Method                 | Complexity | Notes                                           |
-| ---------------------- | ---------- | ----------------------------------------------- |
-| `lingo`, `smifp_*`     | O(n)       | Fastest — recommended for large-scale screening |
-| `edit`, `nlcs`, `clcs` | O(m×n)     | DP — slow for long SMILES                       |
-| `substring`            | O(m²+n²)   | Can be slow for long SMILES                     |
-| `smiles_tfidf`         | O(corpus)  | Fit once on full corpus for batch use           |
-| `ncd`                  | O(n log n) | Compression overhead; fine for millions         |
-| jellyfish methods      | O(n)       | Very fast via C extension                       |
+| Method                                            | Complexity     | Notes                                                       |
+| ------------------------------------------------- | -------------- | ----------------------------------------------------------- |
+| `lingo`, `lingo_tversky`, `lingo_dice`, `smifp_*` | O(n)           | Fastest — recommended for large-scale screening             |
+| `spectrum`                                        | O(n)           | Very fast, equivalent cost to LINGO                         |
+| `mismatch` (k=4, m=1)                             | O(n·k·\|Σ\|)   | ~20–50× slower than `spectrum` for typical SMILES alphabets |
+| `mismatch` (m≥2)                                  | O(n·k²·\|Σ\|²) | Expensive — use only for short SMILES or small alphabets    |
+| `lcs_substring`                                   | O(m×n)         | DP — same cost as `nlcs`                                    |
+| `edit`, `nlcs`, `clcs`                            | O(m×n)         | DP — slow for long SMILES                                   |
+| `substring`                                       | O(m²+n²)       | Can be slow for long SMILES                                 |
+| `smiles_tfidf`                                    | O(corpus)      | Fit once on full corpus for batch use                       |
+| `ncd`                                             | O(n log n)     | Compression overhead; fine for millions                     |
+| jellyfish methods                                 | O(n)           | Very fast via C extension                                   |
