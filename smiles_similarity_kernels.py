@@ -2578,27 +2578,30 @@ def parse_args():
         epilog="""
 Examples:
   # Calculate LINGO similarity between templates and library (directories)
-  python smiles_similarity_kernels.py templates/ library/ output.csv --method lingo
-  
+  python smiles_similarity_kernels.py --templates templates/ --database library/ --output output.csv --method lingo
+
   # Calculate all methods (creates multiple output files)
-  python smiles_similarity_kernels.py templates/ library/ output.csv --all-methods
-  
+  python smiles_similarity_kernels.py --templates templates/ --database library/ --output output.csv --all-methods
+
   # Use files instead of directories
-  python smiles_similarity_kernels.py templates.smi library.smi output.csv --method lingo
-  
+  python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method lingo
+
   # Use CSV files with column specification
-  python smiles_similarity_kernels.py templates.csv database.csv output.csv \\
+  python smiles_similarity_kernels.py --templates templates.csv --database database.csv --output output.csv \\
       --method lingo --templates-smiles-col SMILES --templates-name-col ID \\
       --database-smiles-col SMILES --database-name-col MolID
-  
+
   # Mix directory and file inputs
-  python smiles_similarity_kernels.py templates/ library.smi output.csv --method edit
-  
+  python smiles_similarity_kernels.py --templates templates/ --database library.smi --output output.csv --method edit
+
   # Use edit distance similarity
-  python smiles_similarity_kernels.py templates/ library/ output.csv --method edit
-  
+  python smiles_similarity_kernels.py --templates templates/ --database library/ --output output.csv --method edit
+
   # List available methods
   python smiles_similarity_kernels.py --list-methods
+
+  # Run demo with example molecules
+  python smiles_similarity_kernels.py --demo
 
 Input formats:
   - Directory: Reads all .smi files from the directory
@@ -2616,9 +2619,9 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
         """,
     )
 
-    parser.add_argument("templates", nargs="?", type=str, help="Directory or file containing template molecules (.smi, .csv, .tsv)")
-    parser.add_argument("database", nargs="?", type=str, help="Directory or file containing database/library molecules (.smi, .csv, .tsv)")
-    parser.add_argument("output", nargs="?", type=str, help="Output CSV file path")
+    parser.add_argument("--templates", "-t", type=str, default=None, help="Directory or file containing template molecules (.smi, .csv, .tsv)")
+    parser.add_argument("--database", "-d", type=str, default=None, help="Directory or file containing database/library molecules (.smi, .csv, .tsv)")
+    parser.add_argument("--output", "-o", type=str, default=None, help="Output CSV file path")
 
     parser.add_argument(
         "--method", "-m", type=str, default="lingo", choices=list(AVAILABLE_METHODS.keys()), help="Similarity method to use (default: lingo)"
@@ -2697,7 +2700,9 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
 
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress information")
 
-    return parser.parse_args()
+    parser.add_argument("--demo", action="store_true", help="Run a demonstration with example molecules and exit")
+
+    return parser, parser.parse_args()
 
 
 def _parse_col_arg(col_arg: Optional[str]) -> Optional[Union[int, str]]:
@@ -2724,7 +2729,12 @@ def _parse_col_arg(col_arg: Optional[str]) -> Optional[Union[int, str]]:
 
 def main():
     """Main function for command line execution."""
-    args = parse_args()
+    parser, args = parse_args()
+
+    # Run demo if requested
+    if args.demo:
+        demo()
+        return
 
     # List methods if requested
     if args.list_methods:
@@ -2738,9 +2748,8 @@ def main():
 
     # Check required arguments
     if not args.templates or not args.database or not args.output:
-        print("Error: templates, database, and output are required.")
-        print("Use --help for usage information.")
-        sys.exit(1)
+        parser.print_help()
+        sys.exit(0)
 
     # Parse column arguments
     templates_smiles_col = _parse_col_arg(args.templates_smiles_col)
@@ -2950,9 +2959,4 @@ def demo():
 
 
 if __name__ == "__main__":
-    # If no arguments provided, run demo
-    if len(sys.argv) == 1:
-        demo()
-
-    else:
-        main()
+    main()

@@ -7,7 +7,8 @@ calculate molecular similarity based on SMILES strings only, using multiple simi
 ```bash
 # Calculate similarities between templates and library molecules
 python smiles_similarity_kernels.py \
-    examples/templates.smi examples/database.smi examples/output.csv --method lingo
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method lingo
 
 # $ cat examples/output.csv 
 # Name,Similarity_0054-0090,Similarity_0133-0086
@@ -93,7 +94,8 @@ print(f"Mismatch (k=4, m=1):      {mismatch_kernel_similarity(smiles1, smiles2, 
 ```bash
 # Calculate similarities between templates and library molecules
 python smiles_similarity_kernels.py \
-    examples/templates.smi examples/database.smi examples/output.csv --method lingo
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method lingo
 
 # $ cat examples/output.csv 
 # Name,Similarity_0054-0090,Similarity_0133-0086
@@ -106,35 +108,43 @@ python smiles_similarity_kernels.py \
 
 
 # Use all available methods (creates one output file per method) (see example folder for outputs)
-python smiles_similarity_kernels.py examples/templates.smi examples/database.smi \
-    examples/outputs/examples/output.csv --all-methods
+python smiles_similarity_kernels.py \
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/outputs/output.csv --all-methods
 
 # Query-weighted Tversky on LINGOs (recommended for screening)
 python smiles_similarity_kernels.py \
-    examples/templates.smi examples/database.smi examples/output.csv --method lingo_tversky
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method lingo_tversky
 
 # Classical spectrum kernel (k=4) and mismatch kernel (k=4, m=1)
 python smiles_similarity_kernels.py \
-    examples/templates.smi examples/database.smi examples/output.csv --method spectrum
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method spectrum
 python smiles_similarity_kernels.py \
-    examples/templates.smi examples/database.smi examples/output.csv --method mismatch
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method mismatch
 
 # Canonicalize SMILES before comparison (requires rdkit)
 python smiles_similarity_kernels.py \
-    examples/templates.smi examples/database.smi examples/output.csv --method lingo --canonicalize
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method lingo --canonicalize
 
 # Use InChI representation instead of SMILES (requires rdkit)
 python smiles_similarity_kernels.py \
-    examples/templates.smi examples/database.smi examples/output.csv --method edit --inchi
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method edit --inchi
 
 # Compare using only the connection table of the InChI (topology only)
 python smiles_similarity_kernels.py \
-    examples/templates.smi examples/database.smi examples/output.csv \
-    --method lingo --inchi --inchi-layer connections
-
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method lingo --inchi --inchi-layer connections
 
 # List available methods
 python smiles_similarity_kernels.py --list-methods
+
+# Run built-in demo
+python smiles_similarity_kernels.py --demo
 ```
 
 Expected output format:
@@ -294,16 +304,19 @@ The CLI mirrors this with `--inchi-layer`:
 
 ```bash
 # Full InChI (default)
-python smiles_similarity_kernels.py examples/templates.smi examples/database.smi out.csv \
-    --method lingo --inchi
+python smiles_similarity_kernels.py \
+    --templates examples/templates.smi --database examples/database.smi \
+    --output out.csv --method lingo --inchi
 
 # Compare using only the connection table (topology, no elements/stereochemistry)
-python smiles_similarity_kernels.py examples/templates.smi examples/database.smi out.csv \
-    --method lingo --inchi --inchi-layer connections
+python smiles_similarity_kernels.py \
+    --templates examples/templates.smi --database examples/database.smi \
+    --output out.csv --method lingo --inchi --inchi-layer connections
 
 # Formula + connections (most discriminating combination without stereochemistry)
-python smiles_similarity_kernels.py examples/templates.smi examples/database.smi out.csv \
-    --method lingo --inchi --inchi-layer formula,connections
+python smiles_similarity_kernels.py \
+    --templates examples/templates.smi --database examples/database.smi \
+    --output out.csv --method lingo --inchi --inchi-layer formula,connections
 ```
 
 > **Design note:** when `--inchi` is active the CLI automatically sets `preprocess=False` on similarity functions that support it, so that no SMILES-style character substitution is applied to the InChI string. If you call similarity functions directly with InChI input from Python, pass `preprocess=False` explicitly.
@@ -349,26 +362,30 @@ mol2,0.23400,0.89100
 ## Command Line Reference
 
 ```bash
-python smiles_similarity_kernels.py TEMPLATES LIBRARY OUTPUT [OPTIONS]
+python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --output OUTPUT [OPTIONS]
 ```
 
-| Option                        | Description                                                                                                                                         |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--method METHOD`             | Similarity method (default: `lingo`)                                                                                                                |
-| `--all-methods`               | Run all methods; output named `METHOD_examples/output.csv`                                                                                          |
-| `--list-methods`              | Print all available methods and exit                                                                                                                |
-| `--canonicalize`              | Canonicalize SMILES with RDKit before comparison                                                                                                    |
-| `--inchi`                     | Convert SMILES to InChI (strips `InChI=` prefix) before comparison                                                                                  |
-| `--inchi-layer LAYER[,...]`   | When `--inchi` is used, restrict to selected InChI layer(s). Comma-separated. Default: `all`. See [InChI layer extraction](#inchi-layer-extraction) |
-| `--verbose`, `-v`             | Print progress                                                                                                                                      |
-| `--templates-smiles-col COL`  | SMILES column name/index in templates file                                                                                                          |
-| `--templates-name-col COL`    | Name column in templates file                                                                                                                       |
-| `--templates-delimiter DELIM` | Delimiter for templates file                                                                                                                        |
-| `--templates-no-header`       | Templates file has no header                                                                                                                        |
-| `--database-smiles-col COL`   | SMILES column in database file                                                                                                                      |
-| `--database-name-col COL`     | Name column in database file                                                                                                                        |
-| `--database-delimiter DELIM`  | Delimiter for database file                                                                                                                         |
-| `--database-no-header`        | Database file has no header                                                                                                                         |
+| Option                        | Short | Description                                                                                                                                         |
+| ----------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--templates TEMPLATES`       | `-t`  | Templates file or directory (.smi, .csv, .tsv)                                                                                                      |
+| `--database DATABASE`         | `-d`  | Database/library file or directory (.smi, .csv, .tsv)                                                                                               |
+| `--output OUTPUT`             | `-o`  | Output CSV file path                                                                                                                                |
+| `--method METHOD`             | `-m`  | Similarity method (default: `lingo`)                                                                                                                |
+| `--all-methods`               |       | Run all methods; output named `METHOD_output.csv`                                                                                                   |
+| `--list-methods`              |       | Print all available methods and exit                                                                                                                |
+| `--demo`                      |       | Run a demonstration with example molecules and exit                                                                                                 |
+| `--canonicalize`              |       | Canonicalize SMILES with RDKit before comparison                                                                                                    |
+| `--inchi`                     |       | Convert SMILES to InChI (strips `InChI=` prefix) before comparison                                                                                  |
+| `--inchi-layer LAYER[,...]`   |       | When `--inchi` is used, restrict to selected InChI layer(s). Comma-separated. Default: `all`. See [InChI layer extraction](#inchi-layer-extraction) |
+| `--verbose`, `-v`             |       | Print progress                                                                                                                                      |
+| `--templates-smiles-col COL`  |       | SMILES column name/index in templates file                                                                                                          |
+| `--templates-name-col COL`    |       | Name column in templates file                                                                                                                       |
+| `--templates-delimiter DELIM` |       | Delimiter for templates file                                                                                                                        |
+| `--templates-no-header`       |       | Templates file has no header                                                                                                                        |
+| `--database-smiles-col COL`   |       | SMILES column in database file                                                                                                                      |
+| `--database-name-col COL`     |       | Name column in database file                                                                                                                        |
+| `--database-delimiter DELIM`  |       | Delimiter for database file                                                                                                                         |
+| `--database-no-header`        |       | Database file has no header                                                                                                                         |
 
 ## Differences from Java Implementation
 
