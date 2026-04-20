@@ -1,9 +1,29 @@
 # SMILES-based Similarity Kernels
 
-Python implementation of SMILES-based compound similarity functions for ligand-based virtual screening. The original methods are described in Öztürk et al. (2016) and were originally implemented in Java — this library re-implements, corrects, and substantially extends that work with additional algorithms, chemically-aware preprocessing, SMILES canonicalization, InChI support, and new string-similarity methods not present in the original.
+Python implementation of SMILES-based compound similarity functions for ligand-based virtual screening. Partially inspired by the methods described in Öztürk et al. (2016) which were originally implemented in Java. This library re-implements, corrects, and substantially extends that work with additional algorithms, chemically-aware preprocessing, SMILES canonicalization, InChI support, and new string-similarity methods not present in the original. And more, as work is in progress.
 
 > [!CAUTION]
 > The original Java implementation contains inconsistencies with the manuscript. This implementation corrects those issues (see [Differences from Java Implementation](#differences-from-java-implementation)).
+
+[![Python manual install](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml) [![CodeQL Advanced](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml)
+
+## Very quick start
+
+```bash
+# Calculate similarities between templates and library molecules
+python smiles_similarity_kernels.py \
+    examples/templates.smi examples/database.smi examples/output.csv --method lingo
+
+# $ cat examples/output.csv 
+# Name,Similarity_0054-0090,Similarity_0133-0086
+# 0054-0090,1.00000,0.39080
+# 0061-0013,0.06061,0.12500
+# 0062-0039,0.00000,0.00000
+# 0082-0017,0.08333,0.18431
+# 0083-0114,0.14815,0.18939
+# ...
+```
+
 
 ## Overview
 
@@ -22,25 +42,14 @@ This module provides **31 similarity methods** for comparing chemical compounds 
 
 ## Citation
 
-Based on methods described in:
-
-> Öztürk, H., Ozkirimli, E., & Özgür, A. (2016). A comparative study of SMILES-based compound similarity functions for drug-target interaction prediction. *BMC Bioinformatics*, 17, 128. [DOI: 10.1186/s12859-016-0977-x](https://doi.org/10.1186/s12859-016-0977-x)
-
-Original Java implementation: https://github.com/hkmztrk/SMILESbasedSimilarityKernels
-
 Cite **THIS** implementation using DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18457244.svg)](https://doi.org/10.5281/zenodo.18457244)
 
 ## Installation
 
 ```bash
 # Core (required for most methods)
-pip install numpy pandas
-
-# Full installation (all methods)
-pip install numpy pandas scipy scikit-learn rdkit jellyfish
+pip install -r requirements.txt
 ```
-
-See `requirements.txt` for version constraints.
 
 ## Quick Start
 
@@ -344,7 +353,7 @@ python smiles_similarity_kernels.py TEMPLATES LIBRARY OUTPUT [OPTIONS]
 | Option                        | Description                                                                                                                                         |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--method METHOD`             | Similarity method (default: `lingo`)                                                                                                                |
-| `--all-methods`               | Run all methods; output named `METHOD_examples/output.csv`                                                                                                   |
+| `--all-methods`               | Run all methods; output named `METHOD_examples/output.csv`                                                                                          |
 | `--list-methods`              | Print all available methods and exit                                                                                                                |
 | `--canonicalize`              | Canonicalize SMILES with RDKit before comparison                                                                                                    |
 | `--inchi`                     | Convert SMILES to InChI (strips `InChI=` prefix) before comparison                                                                                  |
@@ -391,3 +400,14 @@ python smiles_similarity_kernels.py TEMPLATES LIBRARY OUTPUT [OPTIONS]
 | `smiles_tfidf`                                    | O(corpus)      | Fit once on full corpus for batch use                       |
 | `ncd`                                             | O(n log n)     | Compression overhead; fine for millions                     |
 | jellyfish methods                                 | O(n)           | Very fast via C extension                                   |
+
+
+## Citation
+
+Based on methods described in:
+
+> Öztürk, H., Ozkirimli, E., & Özgür, A. (2016). A comparative study of SMILES-based compound similarity functions for drug-target interaction prediction. *BMC Bioinformatics*, 17, 128. [DOI: 10.1186/s12859-016-0977-x](https://doi.org/10.1186/s12859-016-0977-x)
+
+Original Java implementation: https://github.com/hkmztrk/SMILESbasedSimilarityKernels
+
+Cite **THIS** implementation using DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18457244.svg)](https://doi.org/10.5281/zenodo.18457244)
