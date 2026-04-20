@@ -3,16 +3,9 @@ name: Python manual install
 on:
   push:
     paths:
-      - '**.py'
-      - '.github/workflows/python-package.yml'
-    branches:
-      - main
-      - devel
-  pull_request:
-    branches:
-      - main
-      - dudadebil
-      - patonawrocki
+    - '**.py'
+    - '**.sh'
+    - '.github/workflows/*.yml'
 
 jobs:
   test:
