@@ -1382,6 +1382,18 @@ AVAILABLE_METHODS = {
         "params": {"ngram_range": (1, 3)},
         "requires": "sklearn",
     },
+    "smiles_tfidf23": {
+        "function": lambda s1, s2: smiles_tfidf_similarity(s1, s2, ngram_range=(2, 3)),
+        "description": "TF-IDF cosine similarity with chemical tokenization (ngram (2,3))",
+        "params": {"ngram_range": (2, 3)},
+        "requires": "sklearn",
+    },
+    "smiles_tfidf14": {
+        "function": lambda s1, s2: smiles_tfidf_similarity(s1, s2, ngram_range=(1, 4)),
+        "description": "TF-IDF cosine similarity with chemical tokenization (ngram (1,4))",
+        "params": {"ngram_range": (1, 4)},
+        "requires": "sklearn",
+    },
     "damerau_levenshtein": {
         "function": damerau_levenshtein_similarity,
         "description": "Damerau-Levenshtein similarity (transpositions as 1 edit)",

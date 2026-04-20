@@ -7,7 +7,7 @@ Python implementation of SMILES-based compound similarity functions for ligand-b
 
 ## Overview
 
-This module provides **19 similarity methods** for comparing chemical compounds represented as SMILES strings (or InChI strings). It can be used as a Python library or run directly from the command line.
+This module provides **21 similarity methods** for comparing chemical compounds represented as SMILES strings (or InChI strings). It can be used as a Python library or run directly from the command line.
 
 **Key extensions beyond the original Java implementation:**
 - Corrected formulas for NLCS, Edit, LINGO edge cases, and SMIfp
@@ -113,6 +113,8 @@ Name,Similarity_0054-0090,Similarity_0133-0086
 | ---------------- | ------------------------- | ---------------------------------------------------------------- | ------------ |
 | `smiles_tfidf`   | `smiles_tfidf_similarity` | TF-IDF cosine similarity with chemical tokenization, ngram (1,2) | scikit-learn |
 | `smiles_tfidf13` | `smiles_tfidf_similarity` | TF-IDF cosine similarity with chemical tokenization, ngram (1,3) | scikit-learn |
+| `smiles_tfidf23` | `smiles_tfidf_similarity` | TF-IDF cosine similarity with chemical tokenization, ngram (2,3) | scikit-learn |
+| `smiles_tfidf14` | `smiles_tfidf_similarity` | TF-IDF cosine similarity with chemical tokenization, ngram (1,4) | scikit-learn |
 
 The `SMILESTokenizer` treats multi-character atoms (`Cl`, `Br`, `Si`, …) and `@@` as indivisible tokens, so TF-IDF operates on chemical units rather than raw characters.
 

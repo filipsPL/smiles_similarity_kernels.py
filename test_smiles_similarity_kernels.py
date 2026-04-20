@@ -351,6 +351,14 @@ class TestSmilesTfidfSimilarity:
         s = m.smiles_tfidf_similarity("CCO", "CCOC", ngram_range=(1, 3))
         assert 0.0 <= s <= 1.0
 
+    def test_ngram_23(self):
+        s = m.smiles_tfidf_similarity("CCO", "CCOC", ngram_range=(2, 3))
+        assert 0.0 <= s <= 1.0
+
+    def test_ngram_14(self):
+        s = m.smiles_tfidf_similarity("CCO", "CCOC", ngram_range=(1, 4))
+        assert 0.0 <= s <= 1.0
+
     def test_vectorizer_reuse(self):
         from sklearn.feature_extraction.text import TfidfVectorizer
         tok = m.SMILESTokenizer()
@@ -484,7 +492,7 @@ class TestAvailableMethods:
         "edit", "nlcs", "clcs", "substring",
         "smifp_cbd", "smifp_tanimoto", "smifp38_cbd", "smifp38_tanimoto",
         "lingo", "lingo3", "lingo5",
-        "smiles_tfidf", "smiles_tfidf13",
+        "smiles_tfidf", "smiles_tfidf13", "smiles_tfidf23", "smiles_tfidf14",
         "damerau_levenshtein", "jaro", "jaro_winkler", "hamming",
         "ncd",
     }
