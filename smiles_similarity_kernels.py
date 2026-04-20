@@ -2,8 +2,8 @@
 """
 SMILES-based Similarity Kernels
 
-Python implementation of SMILES-based compound similarity functions
-as described in:
+Python implementation of SMILES-based compound similarity functions. Partially inspired by
+and extended:
 
 Öztürk, H., Ozkirimli, E., & Özgür, A. (2016). A comparative study of
 SMILES-based compound similarity functions for drug-target interaction
@@ -25,7 +25,9 @@ Usage as module:
 Usage from command line:
     python smiles_similarity_kernels.py templates_dir library_dir output.csv --method lingo
 
-Author: fstefaniak@iimcb.gov.pl, based on the original work by Öztürk, H., Ozkirimli, E., & Özgür, A
+Author: fstefaniak@iimcb.gov.pl, https://github.com/filipsPL/smiles_similarity_kernels.py
+
+Cite all versions by using the DOI 10.5281/zenodo.18457244
 """
 
 import re
