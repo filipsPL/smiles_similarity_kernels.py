@@ -2,7 +2,7 @@
 
 ## **tl;dr**
 
-calculate molecular similarity based on SMILES strings only, using multiple available similarity measures (eg for VS):
+calculate molecular similarity based on SMILES strings only, using multiple similarity measures (eg for VS):
 
 ```bash
 # Calculate similarities between templates and library molecules
@@ -166,7 +166,7 @@ Name,Similarity_0054-0090,Similarity_0133-0086
 
 ### LINGO variants with alternative coefficients (extensions)
 
-Motivated by Bajusz et al. (2025) where query-weighted Tversky consistently outperformed Tanimoto on nucleic-acid targets.
+Motivated by [our paper](https://doi.org/10.1093/bib/bbaf620) where query-weighted Tversky consistently outperformed Tanimoto on nucleic-acid targets.
 
 | CLI name            | Function                   | Description                                                                  | Requires |
 | ------------------- | -------------------------- | ---------------------------------------------------------------------------- | -------- |
@@ -174,7 +174,7 @@ Motivated by Bajusz et al. (2025) where query-weighted Tversky consistently outp
 | `lingo_tversky_sym` | `lingo_tversky_similarity` | Symmetric Tversky (α=β=0.5, equivalent to Dice) on LINGO q-grams             | —        |
 | `lingo_dice`        | `lingo_dice_similarity`    | Sørensen–Dice coefficient on LINGO q-gram counts (q=4)                       | —        |
 
-> **Asymmetry note:** `lingo_tversky` treats the *first* argument as the query (template) and the *second* as the database candidate. Swapping arguments will in general yield different values. This mirrors the "query-weighted Tversky" convention used in Bajusz et al. (2025).
+> **Asymmetry note:** `lingo_tversky` treats the *first* argument as the query (template) and the *second* as the database candidate. Swapping arguments will in general yield different values. This mirrors the "query-weighted Tversky" convention used in our paper [Bajusz et al. (2025)](https://doi.org/10.1093/bib/bbaf620).
 
 ### Spectrum and mismatch kernels (extensions)
 
