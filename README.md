@@ -140,6 +140,16 @@ python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
     --output examples/output.csv --method lingo --inchi --inchi-layer connections
 
+# Convert to SELFIES before comparison (requires selfies)
+python smiles_similarity_kernels.py \
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method edit --selfies
+
+# Use SELFIES-aware TF-IDF similarity
+python smiles_similarity_kernels.py \
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method selfies_tfidf --selfies
+
 # List available methods
 python smiles_similarity_kernels.py --list-methods
 
@@ -377,6 +387,7 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `--canonicalize`              |       | Canonicalize SMILES with RDKit before comparison                                                                                                    |
 | `--inchi`                     |       | Convert SMILES to InChI (strips `InChI=` prefix) before comparison                                                                                  |
 | `--inchi-layer LAYER[,...]`   |       | When `--inchi` is used, restrict to selected InChI layer(s). Comma-separated. Default: `all`. See [InChI layer extraction](#inchi-layer-extraction) |
+| `--selfies`                   |       | Convert SMILES to SELFIES before comparison (requires `selfies`). Sets `preprocess=False` automatically.                                            |
 | `--verbose`, `-v`             |       | Print progress                                                                                                                                      |
 | `--templates-smiles-col COL`  |       | SMILES column name/index in templates file                                                                                                          |
 | `--templates-name-col COL`    |       | Name column in templates file                                                                                                                       |

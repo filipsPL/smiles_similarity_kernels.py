@@ -496,6 +496,7 @@ class TestAvailableMethods:
                    "mismatch", "mismatch3", "mismatch5", "lcs_substring",
                    "smiles_tfidf", "smiles_tfidf13", "smiles_tfidf23", "smiles_tfidf14",
                    "damerau_levenshtein", "jaro", "jaro_winkler", "hamming", "ncd",
+                   "selfies_tfidf", "selfies_tfidf13", "selfies_tfidf23",
     }
 
     def test_all_methods_registered(self):
@@ -580,7 +581,8 @@ class TestCliValidation:
         out = tmp_path / "results.csv"
         result = subprocess.run(
             [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             str(TEMPLATES_SMI), str(DATABASE_SMI), str(out), "--method", "lingo"],
+             "--templates", str(TEMPLATES_SMI), "--database", str(DATABASE_SMI),
+             "--output", str(out), "--method", "lingo"],
             capture_output=True, text=True
         )
         assert result.returncode == 0, result.stderr

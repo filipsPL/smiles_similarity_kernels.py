@@ -77,6 +77,14 @@ try:
 except ImportError:
     JELLYFISH_AVAILABLE = False
 
+# Optional import for selfies (SELFIES molecular string representation)
+try:
+    import selfies as sf
+
+    SELFIES_AVAILABLE = True
+except ImportError:
+    SELFIES_AVAILABLE = False
+
 
 # ============================================================================
 # SMILES Preprocessing
@@ -533,6 +541,43 @@ def smiles_to_inchi_layers(smiles: str, layers: Union[str, List[str]] = "all") -
     if not inchi:
         return ""
     return extract_inchi_layers(inchi, layers)
+
+
+def smiles_to_selfies(smiles: str) -> str:
+    """
+    Convert a SMILES string to a SELFIES string.
+
+    SELFIES (Self-Referencing Embedded Strings) are a 100% robust molecular
+    string representation — every string decodes to a valid molecule.  Unlike
+    SMILES, string-similarity methods on SELFIES cannot produce invalid
+    intermediates, making them useful for generative and similarity tasks.
+
+    Requires the ``selfies`` package (``pip install selfies``).  Returns an
+    empty string when conversion fails or the package is unavailable.
+
+    Parameters
+    ----------
+    smiles : str
+        Input SMILES string
+
+    Returns
+    -------
+    str
+        SELFIES string, or '' on failure
+
+    Examples
+    --------
+    >>> smiles_to_selfies("CCO")
+    '[C][C][O]'
+    >>> smiles_to_selfies("c1ccccc1")
+    '[C][=C][C][=C][C][=C][Ring1][=A]'
+    """
+    if not smiles or not SELFIES_AVAILABLE:
+        return ""
+    try:
+        return sf.encoder(smiles)
+    except Exception:
+        return ""
 
 
 # ============================================================================
@@ -1795,7 +1840,94 @@ def smiles_tfidf_similarity(
 
 
 # ============================================================================
-# 10. Jellyfish-based string similarity metrics
+# 10. SELFIES TF-IDF Cosine Similarity
+# ============================================================================
+
+
+class SELFIESTokenizer:
+    """
+    SELFIES-aware tokenizer for use with sklearn TF-IDF.
+
+    Splits a SELFIES string on its natural token boundaries: each ``[...]``
+    bracket group is one indivisible token.  Characters outside brackets
+    (which should not appear in valid SELFIES) are returned as individual
+    single-character tokens so that malformed input does not silently lose
+    information.
+    """
+
+    _TOKEN_RE = re.compile(r"\[[^\[\]]*\]|.")
+
+    def tokenize(self, selfies: str) -> List[str]:
+        """Split a SELFIES string into its constituent tokens."""
+        return self._TOKEN_RE.findall(selfies)
+
+    def __call__(self, selfies: str) -> List[str]:
+        return self.tokenize(selfies)
+
+
+def selfies_tfidf_similarity(
+    selfies1: str,
+    selfies2: str,
+    corpus: List[str] = None,
+    ngram_range: Tuple[int, int] = (1, 2),
+    vectorizer=None,
+    preprocess: bool = False,
+) -> float:
+    """
+    TF-IDF cosine similarity with SELFIES-aware tokenization.
+
+    Uses :class:`SELFIESTokenizer` so that each ``[token]`` in the SELFIES
+    string is treated as an indivisible unit.  Intended to be called with
+    pre-converted SELFIES strings (use :func:`smiles_to_selfies` first, or
+    pass ``--selfies`` on the CLI).
+
+    The ``preprocess`` argument is accepted for API compatibility but ignored:
+    SELFIES tokens are already semantically atomic and do not benefit from
+    SMILES-style character substitution.
+
+    Requires ``scikit-learn`` and ``selfies``.
+
+    Parameters
+    ----------
+    selfies1, selfies2 : str
+        SELFIES strings to compare
+    corpus : List[str]
+        Corpus used to fit IDF weights.  Defaults to [selfies1, selfies2].
+    ngram_range : Tuple[int, int]
+        N-gram range passed to TfidfVectorizer (default (1, 2)).
+    vectorizer : fitted TfidfVectorizer or None
+        Pre-fitted vectorizer for efficiency in batch use.
+
+    Returns
+    -------
+    float
+        Cosine similarity in [0, 1]
+    """
+    if not SKLEARN_AVAILABLE:
+        raise ImportError("sklearn is required for selfies_tfidf_similarity")
+
+    if vectorizer is None:
+        if corpus is None:
+            corpus = [selfies1, selfies2]
+        tokenizer = SELFIESTokenizer()
+        vectorizer = TfidfVectorizer(
+            tokenizer=tokenizer,
+            analyzer="word",
+            lowercase=False,
+            token_pattern=None,
+            ngram_range=ngram_range,
+            min_df=1,
+            sublinear_tf=True,
+        )
+        vectorizer.fit(corpus)
+
+    vec1 = vectorizer.transform([selfies1])
+    vec2 = vectorizer.transform([selfies2])
+    return float(sklearn_cosine_similarity(vec1, vec2)[0, 0])
+
+
+# ============================================================================
+# 11. Jellyfish-based string similarity metrics
 # ============================================================================
 
 
@@ -2128,6 +2260,24 @@ AVAILABLE_METHODS = {
         "description": "Normalized Compression Distance similarity (gzip, universal/parameter-free)",
         "params": {},
     },
+    "selfies_tfidf": {
+        "function": selfies_tfidf_similarity,
+        "description": "TF-IDF cosine similarity on SELFIES tokens (ngram (1,2))",
+        "params": {"ngram_range": (1, 2)},
+        "requires": "sklearn",
+    },
+    "selfies_tfidf13": {
+        "function": lambda s1, s2, **kw: selfies_tfidf_similarity(s1, s2, ngram_range=(1, 3), **kw),
+        "description": "TF-IDF cosine similarity on SELFIES tokens (ngram (1,3))",
+        "params": {"ngram_range": (1, 3)},
+        "requires": "sklearn",
+    },
+    "selfies_tfidf23": {
+        "function": lambda s1, s2, **kw: selfies_tfidf_similarity(s1, s2, ngram_range=(2, 3), **kw),
+        "description": "TF-IDF cosine similarity on SELFIES tokens (ngram (2,3))",
+        "params": {"ngram_range": (2, 3)},
+        "requires": "sklearn",
+    },
 }
 
 
@@ -2158,6 +2308,8 @@ def get_similarity_function(method: str) -> Callable:
             raise ImportError(f"Method '{method}' requires scikit-learn")
         if req == "jellyfish" and not JELLYFISH_AVAILABLE:
             raise ImportError(f"Method '{method}' requires jellyfish")
+        if req == "selfies" and not SELFIES_AVAILABLE:
+            raise ImportError(f"Method '{method}' requires selfies (pip install selfies)")
 
     return method_info["function"]
 
@@ -2600,6 +2752,12 @@ Examples:
   # List available methods
   python smiles_similarity_kernels.py --list-methods
 
+  # Convert to SELFIES before comparison (requires selfies)
+  python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method edit --selfies
+
+  # Use SELFIES-aware TF-IDF similarity
+  python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method selfies_tfidf --selfies
+
   # Run demo with example molecules
   python smiles_similarity_kernels.py --demo
 
@@ -2615,7 +2773,8 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
                    spectrum, spectrum3, spectrum5, spectrum_cosine,
                    mismatch, mismatch3, mismatch5, lcs_substring,
                    smiles_tfidf, smiles_tfidf13, smiles_tfidf23, smiles_tfidf14,
-                   damerau_levenshtein, jaro, jaro_winkler, hamming, ncd
+                   damerau_levenshtein, jaro, jaro_winkler, hamming, ncd,
+                   selfies_tfidf, selfies_tfidf13, selfies_tfidf23
         """,
     )
 
@@ -2698,6 +2857,14 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
         "--inchi-layer formula,connections  |  --inchi-layer connections,hydrogens",
     )
 
+    parser.add_argument(
+        "--selfies",
+        action="store_true",
+        help="Convert SMILES to SELFIES before comparison (requires selfies). "
+        "All existing string-similarity methods apply directly to SELFIES tokens; "
+        "sets preprocess=False automatically.",
+    )
+
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress information")
 
     parser.add_argument("--demo", action="store_true", help="Run a demonstration with example molecules and exit")
@@ -2749,7 +2916,7 @@ def main():
     # Check required arguments
     if not args.templates or not args.database or not args.output:
         parser.print_help()
-        sys.exit(0)
+        sys.exit(1)
 
     # Parse column arguments
     templates_smiles_col = _parse_col_arg(args.templates_smiles_col)
@@ -2845,6 +3012,16 @@ def main():
             template_smiles = [_transform(s) for s in template_smiles]
             library_smiles = [_transform(s) for s in library_smiles]
 
+    # Optional SELFIES conversion
+    if args.selfies:
+        if not SELFIES_AVAILABLE:
+            print("Warning: --selfies requested but selfies is not installed. Install with: pip install selfies", file=sys.stderr)
+        else:
+            if args.verbose:
+                print("Converting SMILES to SELFIES...")
+            template_smiles = [smiles_to_selfies(s) or s for s in template_smiles]
+            library_smiles = [smiles_to_selfies(s) or s for s in library_smiles]
+
     # Determine which methods to use
     if args.all_methods:
         methods_to_run = list(AVAILABLE_METHODS.keys())
@@ -2867,11 +3044,9 @@ def main():
             total_comparisons = len(library) * len(templates)
             print(f"  Total comparisons: {total_comparisons:,}")
 
-        # When inputs have been converted to InChI, disable SMILES-oriented
-        # character substitution in similarity functions that support it.
-        # SMILES preprocessing would otherwise collapse 'Cl' -> 'L' in the
-        # formula layer of the InChI, corrupting the layered structure.
-        extra_kwargs = {"preprocess": False} if args.inchi else {}
+        # Disable SMILES-oriented character substitution when inputs are InChI
+        # or SELFIES — preprocess_smiles() would corrupt both formats.
+        extra_kwargs = {"preprocess": False} if (args.inchi or args.selfies) else {}
 
         sim_matrix = compute_cross_similarity_matrix(template_smiles, library_smiles, method=method, **extra_kwargs)
 
