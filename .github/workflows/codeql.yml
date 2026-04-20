@@ -13,9 +13,10 @@ name: "CodeQL Advanced"
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    paths:
+    - '**.py'
+    - '**.sh'
+    - '.github/workflows/*.yml'
 
 jobs:
   analyze:
