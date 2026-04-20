@@ -1,13 +1,8 @@
 # SMILES-based Similarity Kernels
 
-Python implementation of SMILES-based compound similarity functions for ligand-based virtual screening. Partially inspired by the methods described in Öztürk et al. (2016) which were originally implemented in Java. This library re-implements, corrects, and substantially extends that work with additional algorithms, chemically-aware preprocessing, SMILES canonicalization, InChI support, and new string-similarity methods not present in the original. And more, as work is in progress.
+## **tl;dr**
 
-> [!CAUTION]
-> The original Java implementation contains inconsistencies with the manuscript. This implementation corrects those issues (see [Differences from Java Implementation](#differences-from-java-implementation)).
-
-[![Python manual install](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml) [![CodeQL Advanced](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml)
-
-## Very quick start
+calculate molecular similarity based on SMILES strings only, using multiple available similarity measures (eg for VS):
 
 ```bash
 # Calculate similarities between templates and library molecules
@@ -24,6 +19,17 @@ python smiles_similarity_kernels.py \
 # ...
 ```
 
+## About
+
+Python implementation of SMILES-based compound similarity functions for ligand-based virtual screening. Partially inspired by the methods described in Öztürk et al. (2016) which were originally implemented in Java. This library re-implements, corrects, and substantially extends that work with additional algorithms, chemically-aware preprocessing, SMILES canonicalization, InChI support, and new string-similarity methods not present in the original. And more, as work is in progress.
+
+> [!CAUTION]
+> The original Java implementation contains inconsistencies with the manuscript. This implementation corrects those issues (see [Differences from Java Implementation](#differences-from-java-implementation)).
+
+[![Python manual install](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml) [![CodeQL Advanced](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml)
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18457244.svg)](https://doi.org/10.5281/zenodo.18457244)
+
 
 ## Overview
 
@@ -39,10 +45,6 @@ This module provides **31 similarity methods** for comparing chemical compounds 
 - TF-IDF cosine similarity with chemically-aware tokenization (`SMILESTokenizer`)
 - Five additional string metrics: Damerau-Levenshtein, Jaro, Jaro-Winkler, Hamming, and Normalized Compression Distance (NCD)
 - **New in this release:** classical spectrum kernel, mismatch `(k, m)` kernel, query-weighted asymmetric Tversky on LINGOs, Sørensen-Dice on LINGOs, and stand-alone longest-common-substring similarity
-
-## Citation
-
-Cite **THIS** implementation using DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18457244.svg)](https://doi.org/10.5281/zenodo.18457244)
 
 ## Installation
 
