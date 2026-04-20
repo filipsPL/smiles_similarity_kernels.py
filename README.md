@@ -82,33 +82,43 @@ print(f"Mismatch (k=4, m=1):      {mismatch_kernel_similarity(smiles1, smiles2, 
 ```bash
 # Calculate similarities between templates and library molecules
 python smiles_similarity_kernels.py \
-    templates.smi library.smi output.csv --method lingo
+    examples/templates.smi examples/database.smi examples/output.csv --method lingo
+
+# $ cat examples/output.csv 
+# Name,Similarity_0054-0090,Similarity_0133-0086
+# 0054-0090,1.00000,0.39080
+# 0061-0013,0.06061,0.12500
+# 0062-0039,0.00000,0.00000
+# 0082-0017,0.08333,0.18431
+# 0083-0114,0.14815,0.18939
+# ...
+
 
 # Use all available methods (creates one output file per method) (see example folder for outputs)
 python smiles_similarity_kernels.py examples/templates.smi examples/database.smi \
-    examples/outputs/output.csv --all-methods
+    examples/outputs/examples/output.csv --all-methods
 
 # Query-weighted Tversky on LINGOs (recommended for screening)
 python smiles_similarity_kernels.py \
-    templates.smi library.smi output.csv --method lingo_tversky
+    examples/templates.smi examples/database.smi examples/output.csv --method lingo_tversky
 
 # Classical spectrum kernel (k=4) and mismatch kernel (k=4, m=1)
 python smiles_similarity_kernels.py \
-    templates.smi library.smi output.csv --method spectrum
+    examples/templates.smi examples/database.smi examples/output.csv --method spectrum
 python smiles_similarity_kernels.py \
-    templates.smi library.smi output.csv --method mismatch
+    examples/templates.smi examples/database.smi examples/output.csv --method mismatch
 
 # Canonicalize SMILES before comparison (requires rdkit)
 python smiles_similarity_kernels.py \
-    templates.smi library.smi output.csv --method lingo --canonicalize
+    examples/templates.smi examples/database.smi examples/output.csv --method lingo --canonicalize
 
 # Use InChI representation instead of SMILES (requires rdkit)
 python smiles_similarity_kernels.py \
-    templates.smi library.smi output.csv --method edit --inchi
+    examples/templates.smi examples/database.smi examples/output.csv --method edit --inchi
 
 # Compare using only the connection table of the InChI (topology only)
 python smiles_similarity_kernels.py \
-    templates.smi library.smi output.csv \
+    examples/templates.smi examples/database.smi examples/output.csv \
     --method lingo --inchi --inchi-layer connections
 
 
@@ -273,15 +283,15 @@ The CLI mirrors this with `--inchi-layer`:
 
 ```bash
 # Full InChI (default)
-python smiles_similarity_kernels.py templates.smi library.smi out.csv \
+python smiles_similarity_kernels.py examples/templates.smi examples/database.smi out.csv \
     --method lingo --inchi
 
 # Compare using only the connection table (topology, no elements/stereochemistry)
-python smiles_similarity_kernels.py templates.smi library.smi out.csv \
+python smiles_similarity_kernels.py examples/templates.smi examples/database.smi out.csv \
     --method lingo --inchi --inchi-layer connections
 
 # Formula + connections (most discriminating combination without stereochemistry)
-python smiles_similarity_kernels.py templates.smi library.smi out.csv \
+python smiles_similarity_kernels.py examples/templates.smi examples/database.smi out.csv \
     --method lingo --inchi --inchi-layer formula,connections
 ```
 
@@ -334,7 +344,7 @@ python smiles_similarity_kernels.py TEMPLATES LIBRARY OUTPUT [OPTIONS]
 | Option                        | Description                                                                                                                                         |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--method METHOD`             | Similarity method (default: `lingo`)                                                                                                                |
-| `--all-methods`               | Run all methods; output named `METHOD_output.csv`                                                                                                   |
+| `--all-methods`               | Run all methods; output named `METHOD_examples/output.csv`                                                                                                   |
 | `--list-methods`              | Print all available methods and exit                                                                                                                |
 | `--canonicalize`              | Canonicalize SMILES with RDKit before comparison                                                                                                    |
 | `--inchi`                     | Convert SMILES to InChI (strips `InChI=` prefix) before comparison                                                                                  |
