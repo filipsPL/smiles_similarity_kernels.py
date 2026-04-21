@@ -16,3 +16,6 @@ jellyfish>=1.0
 
 # just for testing
 pytest
+
+# SELFIES for making selfies
+selfies

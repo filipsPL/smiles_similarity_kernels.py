@@ -33,6 +33,7 @@ Cite all versions by using the DOI 10.5281/zenodo.18457244
 import re
 import os
 import sys
+import random
 import argparse
 import numpy as np
 import pandas as pd
@@ -541,6 +542,38 @@ def smiles_to_inchi_layers(smiles: str, layers: Union[str, List[str]] = "all") -
     if not inchi:
         return ""
     return extract_inchi_layers(inchi, layers)
+
+
+def shuffle_smiles(smiles: str, seed: Optional[int] = None) -> str:
+    """
+    Randomly shuffle the characters of a SMILES string.
+
+    This is a **negative control** transformation: the result is a chemically
+    meaningless string of the same length and character composition as the
+    input.  Similarity scores computed against shuffled strings should be
+    close to the baseline expected for random string pairs.
+
+    Parameters
+    ----------
+    smiles : str
+        Input SMILES string
+    seed : int or None
+        Optional random seed for reproducibility
+
+    Returns
+    -------
+    str
+        Character-shuffled version of the input string
+
+    Examples
+    --------
+    >>> sorted(shuffle_smiles("CCO")) == sorted("CCO")
+    True
+    """
+    chars = list(smiles)
+    rng = random.Random(seed)
+    rng.shuffle(chars)
+    return "".join(chars)
 
 
 def smiles_to_selfies(smiles: str) -> str:
@@ -2758,6 +2791,12 @@ Examples:
   # Use SELFIES-aware TF-IDF similarity
   python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method selfies_tfidf --selfies
 
+  # Shuffle SMILES characters (negative control — destroys chemistry)
+  python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method lingo --shuffle
+
+  # Reproducible shuffle
+  python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method lingo --shuffle --shuffle-seed 42
+
   # Run demo with example molecules
   python smiles_similarity_kernels.py --demo
 
@@ -2863,6 +2902,24 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
         help="Convert SMILES to SELFIES before comparison (requires selfies). "
         "All existing string-similarity methods apply directly to SELFIES tokens; "
         "sets preprocess=False automatically.",
+    )
+
+    parser.add_argument(
+        "--shuffle",
+        action="store_true",
+        help="Randomly shuffle characters in each SMILES string before comparison. "
+        "Negative control: destroys all chemical meaning while preserving string "
+        "length and character composition. Similarity scores should approach "
+        "baseline random-pair values.",
+    )
+
+    parser.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=None,
+        metavar="SEED",
+        help="Random seed for --shuffle (default: None, i.e. non-reproducible). "
+        "Use a fixed seed to get the same shuffled strings across runs.",
     )
 
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress information")
@@ -3022,6 +3079,14 @@ def main():
             template_smiles = [smiles_to_selfies(s) or s for s in template_smiles]
             library_smiles = [smiles_to_selfies(s) or s for s in library_smiles]
 
+    # Optional shuffle (negative control)
+    if args.shuffle:
+        if args.verbose:
+            seed_msg = f" (seed={args.shuffle_seed})" if args.shuffle_seed is not None else " (no seed)"
+            print(f"Shuffling SMILES characters{seed_msg} — negative control mode")
+        template_smiles = [shuffle_smiles(s, seed=args.shuffle_seed) for s in template_smiles]
+        library_smiles = [shuffle_smiles(s, seed=args.shuffle_seed) for s in library_smiles]
+
     # Determine which methods to use
     if args.all_methods:
         methods_to_run = list(AVAILABLE_METHODS.keys())
@@ -3048,7 +3113,14 @@ def main():
         # or SELFIES — preprocess_smiles() would corrupt both formats.
         extra_kwargs = {"preprocess": False} if (args.inchi or args.selfies) else {}
 
-        sim_matrix = compute_cross_similarity_matrix(template_smiles, library_smiles, method=method, **extra_kwargs)
+        try:
+            sim_matrix = compute_cross_similarity_matrix(template_smiles, library_smiles, method=method, **extra_kwargs)
+        except ImportError as exc:
+            if args.all_methods:
+                print(f"  [skip] {method}: {exc}", file=sys.stderr)
+                continue
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
 
         # Write output
         if args.verbose:
