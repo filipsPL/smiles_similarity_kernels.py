@@ -488,16 +488,17 @@ class TestNcdSimilarity:
 # ---------------------------------------------------------------------------
 
 class TestAvailableMethods:
+    _TFIDF_GRID = {f"{prefix}{m}{n}" for m in range(1, 7) for n in range(m, 7)
+                   for prefix in ("smiles_tfidf", "selfies_tfidf")}
     EXPECTED = {
-    "edit", "nlcs", "clcs", "substring", "smifp_cbd", "smifp_tanimoto",
-                   "smifp38_cbd", "smifp38_tanimoto", "lingo", "lingo3", "lingo5",
-                   "lingo_tversky", "lingo_tversky_sym", "lingo_dice",
-                   "spectrum", "spectrum3", "spectrum5", "spectrum_cosine",
-                   "mismatch", "mismatch3", "mismatch5", "lcs_substring",
-                   "smiles_tfidf", "smiles_tfidf13", "smiles_tfidf23", "smiles_tfidf14",
-                   "damerau_levenshtein", "jaro", "jaro_winkler", "hamming", "ncd",
-                   "selfies_tfidf", "selfies_tfidf13", "selfies_tfidf23",
-    }
+        "edit", "nlcs", "clcs", "substring", "smifp_cbd", "smifp_tanimoto",
+        "smifp38_cbd", "smifp38_tanimoto", "lingo", "lingo3", "lingo5",
+        "lingo_tversky", "lingo_tversky_sym", "lingo_dice",
+        "spectrum", "spectrum3", "spectrum5", "spectrum_cosine",
+        "mismatch", "mismatch3", "mismatch5", "lcs_substring",
+        "smiles_tfidf", "selfies_tfidf",        # backward-compat aliases
+        "damerau_levenshtein", "jaro", "jaro_winkler", "hamming", "ncd",
+    } | _TFIDF_GRID
 
     def test_all_methods_registered(self):
         assert self.EXPECTED == set(m.AVAILABLE_METHODS.keys())

@@ -2240,28 +2240,21 @@ AVAILABLE_METHODS = {
         "description": "Normalised Longest Common Substring (contiguous) — LCSubstr²/(len1×len2)",
         "params": {},
     },
+    **{
+        f"smiles_tfidf{m}{n}": {
+            "function": (lambda _m, _n: lambda s1, s2, **kw: smiles_tfidf_similarity(s1, s2, ngram_range=(_m, _n), **kw))(m, n),
+            "description": f"TF-IDF cosine similarity with chemical tokenization (ngram ({m},{n}))",
+            "params": {"ngram_range": (m, n)},
+            "requires": "sklearn",
+        }
+        for m in range(1, 7)
+        for n in range(m, 7)
+    },
+    # Backward-compatible aliases (no numeric suffix = (1,2) default)
     "smiles_tfidf": {
         "function": smiles_tfidf_similarity,
         "description": "TF-IDF cosine similarity with chemical tokenization (ngram (1,2))",
         "params": {"ngram_range": (1, 2)},
-        "requires": "sklearn",
-    },
-    "smiles_tfidf13": {
-        "function": lambda s1, s2, **kw: smiles_tfidf_similarity(s1, s2, ngram_range=(1, 3), **kw),
-        "description": "TF-IDF cosine similarity with chemical tokenization (ngram (1,3))",
-        "params": {"ngram_range": (1, 3)},
-        "requires": "sklearn",
-    },
-    "smiles_tfidf23": {
-        "function": lambda s1, s2, **kw: smiles_tfidf_similarity(s1, s2, ngram_range=(2, 3), **kw),
-        "description": "TF-IDF cosine similarity with chemical tokenization (ngram (2,3))",
-        "params": {"ngram_range": (2, 3)},
-        "requires": "sklearn",
-    },
-    "smiles_tfidf14": {
-        "function": lambda s1, s2, **kw: smiles_tfidf_similarity(s1, s2, ngram_range=(1, 4), **kw),
-        "description": "TF-IDF cosine similarity with chemical tokenization (ngram (1,4))",
-        "params": {"ngram_range": (1, 4)},
         "requires": "sklearn",
     },
     "damerau_levenshtein": {
@@ -2293,22 +2286,21 @@ AVAILABLE_METHODS = {
         "description": "Normalized Compression Distance similarity (gzip, universal/parameter-free)",
         "params": {},
     },
+    **{
+        f"selfies_tfidf{m}{n}": {
+            "function": (lambda _m, _n: lambda s1, s2, **kw: selfies_tfidf_similarity(s1, s2, ngram_range=(_m, _n), **kw))(m, n),
+            "description": f"TF-IDF cosine similarity on SELFIES tokens (ngram ({m},{n}))",
+            "params": {"ngram_range": (m, n)},
+            "requires": "sklearn",
+        }
+        for m in range(1, 7)
+        for n in range(m, 7)
+    },
+    # Backward-compatible alias (no numeric suffix = (1,2) default)
     "selfies_tfidf": {
         "function": selfies_tfidf_similarity,
         "description": "TF-IDF cosine similarity on SELFIES tokens (ngram (1,2))",
         "params": {"ngram_range": (1, 2)},
-        "requires": "sklearn",
-    },
-    "selfies_tfidf13": {
-        "function": lambda s1, s2, **kw: selfies_tfidf_similarity(s1, s2, ngram_range=(1, 3), **kw),
-        "description": "TF-IDF cosine similarity on SELFIES tokens (ngram (1,3))",
-        "params": {"ngram_range": (1, 3)},
-        "requires": "sklearn",
-    },
-    "selfies_tfidf23": {
-        "function": lambda s1, s2, **kw: selfies_tfidf_similarity(s1, s2, ngram_range=(2, 3), **kw),
-        "description": "TF-IDF cosine similarity on SELFIES tokens (ngram (2,3))",
-        "params": {"ngram_range": (2, 3)},
         "requires": "sklearn",
     },
 }
@@ -2785,17 +2777,23 @@ Examples:
   # List available methods
   python smiles_similarity_kernels.py --list-methods
 
-  # Convert to SELFIES before comparison (requires selfies)
-  python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method edit --selfies
+  # Convert to SELFIES before comparison (requires selfies); disable SMILES preprocessing
+  python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method edit --selfies --no-preprocess
 
   # Use SELFIES-aware TF-IDF similarity
-  python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method selfies_tfidf --selfies
+  python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method selfies_tfidf --selfies --no-preprocess
 
-  # Shuffle SMILES characters (negative control — destroys chemistry)
+  # Convert to InChI; disable SMILES preprocessing so InChI strings are not corrupted
+  python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method lingo --inchi --no-preprocess
+
+  # Shuffle characters after conversion (negative control — destroys chemistry)
   python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method lingo --shuffle
 
-  # Reproducible shuffle
+  # Reproducible shuffle with fixed seed
   python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method lingo --shuffle --shuffle-seed 42
+
+  # Benchmarking: compare raw SMILES strings without any normalization
+  python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method lingo --no-preprocess
 
   # Run demo with example molecules
   python smiles_similarity_kernels.py --demo
@@ -2811,14 +2809,16 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
                    lingo_tversky, lingo_tversky_sym, lingo_dice,
                    spectrum, spectrum3, spectrum5, spectrum_cosine,
                    mismatch, mismatch3, mismatch5, lcs_substring,
-                   smiles_tfidf, smiles_tfidf13, smiles_tfidf23, smiles_tfidf14,
-                   damerau_levenshtein, jaro, jaro_winkler, hamming, ncd,
-                   selfies_tfidf, selfies_tfidf13, selfies_tfidf23
+                   smiles_tfidf, smiles_tfidf{m}{n} (m=1..6, n=m..6, e.g. smiles_tfidf44),
+                   selfies_tfidf, selfies_tfidf{m}{n} (m=1..6, n=m..6, e.g. selfies_tfidf44),
+                   damerau_levenshtein, jaro, jaro_winkler, hamming, ncd
         """,
     )
 
     parser.add_argument("--templates", "-t", type=str, default=None, help="Directory or file containing template molecules (.smi, .csv, .tsv)")
-    parser.add_argument("--database", "-d", type=str, default=None, help="Directory or file containing database/library molecules (.smi, .csv, .tsv)")
+    parser.add_argument(
+        "--database", "-d", type=str, default=None, help="Directory or file containing database/library molecules (.smi, .csv, .tsv)"
+    )
     parser.add_argument("--output", "-o", type=str, default=None, help="Output CSV file path")
 
     parser.add_argument(
@@ -2869,57 +2869,76 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
 
     parser.add_argument("--list-methods", action="store_true", help="List available similarity methods and exit")
 
-    parser.add_argument(
-        "--canonicalize",
-        action="store_true",
-        help="Canonicalize SMILES with RDKit before comparison (requires rdkit). " 'Ensures "CCO" and "OCC" are treated as the same molecule.',
+    # ── CONVERT ────────────────────────────────────────────────────────────────
+    convert_group = parser.add_argument_group(
+        "Convert (stage 2)",
+        "Select the string representation used for similarity. "
+        "Input is always read as SMILES; one of these flags converts it before comparison. "
+        "Default: keep as SMILES.",
     )
-
-    parser.add_argument(
+    convert_ex = convert_group.add_mutually_exclusive_group()
+    convert_ex.add_argument(
         "--inchi",
         action="store_true",
-        help='Convert SMILES to InChI (stripping the "InChI=" prefix) before '
-        "comparison (requires rdkit). Useful for representation-independent "
-        "similarity; implies --canonicalize.",
+        help="Convert SMILES → InChI (requires rdkit). "
+        "Strips the 'InChI=1S/' prefix; use --inchi-layer to select a subset of layers.",
+    )
+    convert_ex.add_argument(
+        "--selfies",
+        action="store_true",
+        help="Convert SMILES → SELFIES (requires selfies). "
+        "All string-similarity methods apply directly to SELFIES bracket tokens.",
     )
 
-    parser.add_argument(
+    convert_group.add_argument(
         "--inchi-layer",
         type=str,
         default="all",
         metavar="LAYER[,LAYER,...]",
-        help="When --inchi is used, restrict comparison to selected InChI layer(s). "
-        "Comma-separated list. Supported layers: formula, connections, hydrogens, "
+        help="When --inchi is used, restrict to selected InChI layer(s). "
+        "Comma-separated. Supported layers: formula, connections, hydrogens, "
         "charge, protons, stereo_db, stereo_tet, stereo_parity, stereo_type, "
-        "isotope, fixedH, reconnected. Default: 'all' (full InChI minus version tag). "
-        "Examples: --inchi-layer connections  |  "
-        "--inchi-layer formula,connections  |  --inchi-layer connections,hydrogens",
+        "isotope, fixedH, reconnected. Default: 'all' (full InChI minus version tag).",
     )
 
-    parser.add_argument(
-        "--selfies",
+    # ── NORMALIZE ──────────────────────────────────────────────────────────────
+    norm_group = parser.add_argument_group(
+        "Normalize (stage 3)",
+        "Normalization applied after conversion. "
+        "ELEMENT_REPLACEMENTS substitution (preprocess) is on by default for SMILES "
+        "and automatically disabled for InChI and SELFIES.",
+    )
+    norm_group.add_argument(
+        "--canonicalize",
         action="store_true",
-        help="Convert SMILES to SELFIES before comparison (requires selfies). "
-        "All existing string-similarity methods apply directly to SELFIES tokens; "
-        "sets preprocess=False automatically.",
+        help="Canonicalize SMILES with RDKit before comparison (requires rdkit, SMILES only). "
+        'Ensures "CCO" and "OCC" are treated as the same molecule.',
+    )
+    norm_group.add_argument(
+        "--no-preprocess",
+        action="store_true",
+        help="Disable SMILES ELEMENT_REPLACEMENTS character substitution (preprocess=False). "
+        "Only relevant when string type is SMILES; ignored otherwise. "
+        "Useful for benchmarking raw SMILES strings without normalization.",
     )
 
-    parser.add_argument(
+    # ── AUGMENT ────────────────────────────────────────────────────────────────
+    aug_group = parser.add_argument_group(
+        "Augment (stage 4)",
+        "Applied after normalization, to the final string representation.",
+    )
+    aug_group.add_argument(
         "--shuffle",
         action="store_true",
-        help="Randomly shuffle characters in each SMILES string before comparison. "
-        "Negative control: destroys all chemical meaning while preserving string "
-        "length and character composition. Similarity scores should approach "
-        "baseline random-pair values.",
+        help="Randomly shuffle characters in each string (type-agnostic negative control). "
+        "Destroys chemical meaning while preserving length and character composition.",
     )
-
-    parser.add_argument(
+    aug_group.add_argument(
         "--shuffle-seed",
         type=int,
         default=None,
         metavar="SEED",
-        help="Random seed for --shuffle (default: None, i.e. non-reproducible). "
-        "Use a fixed seed to get the same shuffled strings across runs.",
+        help="Random seed for --shuffle (default: None = non-reproducible).",
     )
 
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress information")
@@ -3024,81 +3043,91 @@ def main():
 
     # Get ordered lists
     template_names = list(templates.keys())
-    template_smiles = [templates[n] for n in template_names]
+    template_strings = [templates[n] for n in template_names]
     library_names = list(library.keys())
-    library_smiles = [library[n] for n in library_names]
+    library_strings = [library[n] for n in library_names]
 
-    # Optional SMILES canonicalization / InChI conversion
-    if args.inchi or args.canonicalize:
+    # ── CONVERT (stage 2) ─────────────────────────────────────────────────────
+    # Input is always SMILES. Convert to the requested representation.
+    string_type = "smiles"  # tracks current type through the pipeline
+
+    if args.inchi:
         if not RDKIT_AVAILABLE:
-            print("Warning: --canonicalize/--inchi requested but RDKit is not installed. " "Install with: pip install rdkit", file=sys.stderr)
+            print("Error: --inchi requires rdkit. Install with: pip install rdkit", file=sys.stderr)
+            sys.exit(1)
+        layers_arg = [s.strip() for s in args.inchi_layer.split(",") if s.strip()]
+        if len(layers_arg) == 1 and layers_arg[0] == "all":
+            layers_for_convert: Union[str, List[str]] = "all"
         else:
-            if args.inchi:
-                # Parse and validate layer selection
-                layers_arg = [s.strip() for s in args.inchi_layer.split(",") if s.strip()]
-                if len(layers_arg) == 1 and layers_arg[0] == "all":
-                    layers_for_transform: Union[str, List[str]] = "all"
-                else:
-                    # Validate against known layers
-                    for _l in layers_arg:
-                        if _l != "all" and _l not in INCHI_LAYERS:
-                            print(
-                                f"Error: unknown InChI layer '{_l}'. " f"Available: {list(INCHI_LAYERS.keys())}",
-                                file=sys.stderr,
-                            )
-                            sys.exit(1)
-                    layers_for_transform = layers_arg
+            for _l in layers_arg:
+                if _l != "all" and _l not in INCHI_LAYERS:
+                    print(f"Error: unknown InChI layer '{_l}'. Available: {list(INCHI_LAYERS.keys())}", file=sys.stderr)
+                    sys.exit(1)
+            layers_for_convert = layers_arg
+        if args.verbose:
+            layer_desc = "all layers" if layers_for_convert == "all" else f"layers: {layers_for_convert}"
+            print(f"[convert] SMILES → InChI ({layer_desc})")
+        template_strings = [smiles_to_inchi_layers(s, layers_for_convert) or s for s in template_strings]
+        library_strings = [smiles_to_inchi_layers(s, layers_for_convert) or s for s in library_strings]
+        string_type = "inchi"
 
-                if args.verbose:
-                    if layers_for_transform == "all":
-                        print("Converting SMILES to InChI (stripping 'InChI=' prefix and version tag)...")
-                    else:
-                        print(f"Converting SMILES to InChI layers: {layers_for_transform}")
-
-                def _transform(s, _layers=layers_for_transform):
-                    out = smiles_to_inchi_layers(s, _layers)
-                    return out or s
-
-            else:
-                if args.verbose:
-                    print("Canonicalizing SMILES with RDKit...")
-
-                def _transform(s):
-                    return canonicalize_smiles(s)
-
-            template_smiles = [_transform(s) for s in template_smiles]
-            library_smiles = [_transform(s) for s in library_smiles]
-
-    # Optional SELFIES conversion
-    if args.selfies:
+    elif args.selfies:
         if not SELFIES_AVAILABLE:
-            print("Warning: --selfies requested but selfies is not installed. Install with: pip install selfies", file=sys.stderr)
+            print("Error: --selfies requires selfies. Install with: pip install selfies", file=sys.stderr)
+            sys.exit(1)
+        if args.verbose:
+            print("[convert] SMILES → SELFIES")
+        template_strings = [smiles_to_selfies(s) or s for s in template_strings]
+        library_strings = [smiles_to_selfies(s) or s for s in library_strings]
+        string_type = "selfies"
+
+    # ── NORMALIZE (stage 3) ───────────────────────────────────────────────────
+    # --canonicalize: SMILES-only, applied before ELEMENT_REPLACEMENTS
+    if args.canonicalize:
+        if string_type != "smiles":
+            print(f"Warning: --canonicalize ignored for string type '{string_type}' (SMILES only)", file=sys.stderr)
+        elif not RDKIT_AVAILABLE:
+            print("Error: --canonicalize requires rdkit. Install with: pip install rdkit", file=sys.stderr)
+            sys.exit(1)
         else:
             if args.verbose:
-                print("Converting SMILES to SELFIES...")
-            template_smiles = [smiles_to_selfies(s) or s for s in template_smiles]
-            library_smiles = [smiles_to_selfies(s) or s for s in library_smiles]
+                print("[normalize] canonicalizing SMILES")
+            template_strings = [canonicalize_smiles(s) for s in template_strings]
+            library_strings = [canonicalize_smiles(s) for s in library_strings]
 
-    # Optional shuffle (negative control)
+    # ELEMENT_REPLACEMENTS (preprocess): on by default for SMILES, always off for others
+    if string_type == "smiles" and not args.no_preprocess:
+        preprocess = True
+    else:
+        preprocess = False
+    if args.verbose and string_type == "smiles":
+        state = "on" if preprocess else "off (--no-preprocess)"
+        print(f"[normalize] ELEMENT_REPLACEMENTS: {state}")
+
+    # ── AUGMENT (stage 4) ─────────────────────────────────────────────────────
     if args.shuffle:
         if args.verbose:
-            seed_msg = f" (seed={args.shuffle_seed})" if args.shuffle_seed is not None else " (no seed)"
-            print(f"Shuffling SMILES characters{seed_msg} — negative control mode")
-        template_smiles = [shuffle_smiles(s, seed=args.shuffle_seed) for s in template_smiles]
-        library_smiles = [shuffle_smiles(s, seed=args.shuffle_seed) for s in library_smiles]
+            seed_msg = f"seed={args.shuffle_seed}" if args.shuffle_seed is not None else "no seed"
+            print(f"[augment] shuffling strings ({seed_msg}) — negative control")
+        template_strings = [shuffle_smiles(s, seed=args.shuffle_seed) for s in template_strings]
+        library_strings = [shuffle_smiles(s, seed=args.shuffle_seed) for s in library_strings]
 
-    # Determine which methods to use
+    # ── SIMILARITY (stage 5) ──────────────────────────────────────────────────
+    if args.verbose:
+        print(f"\nString type: {string_type} | preprocess: {preprocess} | strings: {len(template_strings)} templates, {len(library_strings)} library")
+
     if args.all_methods:
         methods_to_run = list(AVAILABLE_METHODS.keys())
     else:
         methods_to_run = [args.method]
 
-    # Calculate similarities for each method
     for method in methods_to_run:
         if args.all_methods:
-            # Generate output filename for this method
             output_path = Path(args.output)
-            method_output = output_path.parent / f"{method}_{output_path.name}"
+            # stem is e.g. "smiles__replaced" or "inchi_all__" (trailing __ when no mods)
+            # final name: "{repr}__{mods}__{method}.csv"
+            stem = output_path.stem.rstrip("_")
+            method_output = output_path.parent / f"{stem}__{method}.csv"
         else:
             method_output = args.output
 
@@ -3106,15 +3135,13 @@ def main():
             if args.all_methods:
                 print(f"\nProcessing method: {method}")
             print("Calculating similarities...")
-            total_comparisons = len(library) * len(templates)
+            total_comparisons = len(library_strings) * len(template_strings)
             print(f"  Total comparisons: {total_comparisons:,}")
 
-        # Disable SMILES-oriented character substitution when inputs are InChI
-        # or SELFIES — preprocess_smiles() would corrupt both formats.
-        extra_kwargs = {"preprocess": False} if (args.inchi or args.selfies) else {}
+        extra_kwargs = {"preprocess": preprocess}
 
         try:
-            sim_matrix = compute_cross_similarity_matrix(template_smiles, library_smiles, method=method, **extra_kwargs)
+            sim_matrix = compute_cross_similarity_matrix(template_strings, library_strings, method=method, **extra_kwargs)
         except ImportError as exc:
             if args.all_methods:
                 print(f"  [skip] {method}: {exc}", file=sys.stderr)

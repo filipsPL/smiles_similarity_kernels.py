@@ -27,14 +27,14 @@ Python implementation of SMILES-based compound similarity functions for ligand-b
 > [!CAUTION]
 > The original Java implementation contains inconsistencies with the manuscript. This implementation corrects those issues (see [Differences from Java Implementation](#differences-from-java-implementation)).
 
-[![Python manual install](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml) [![CodeQL Advanced](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml)
+[![Python manual install](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml) [![CodeQL Advanced](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml) [![osv scanner](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/osv-scanner.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/osv-scanner.yml)
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18457244.svg)](https://doi.org/10.5281/zenodo.18457244)
 
 
 ## Overview
 
-This module provides **31 similarity methods** for comparing chemical compounds represented as SMILES strings (or InChI strings). It can be used as a Python library or run directly from the command line.
+This module provides **71 similarity methods** for comparing chemical compounds represented as SMILES strings (or InChI/SELFIES strings). It can be used as a Python library or run directly from the command line.
 
 **Key extensions beyond the original Java implementation:**
 - Corrected formulas for NLCS, Edit, LINGO edge cases, and SMIfp
@@ -43,9 +43,34 @@ This module provides **31 similarity methods** for comparing chemical compounds 
 - SMILES canonicalization via RDKit (`--canonicalize`)
 - InChI conversion (`--inchi`) for representation-independent comparison, with optional per-layer selection (`--inchi-layer formula,connections,...`)
 - Layer-respecting InChI preprocessing (`preprocess_inchi`, `extract_inchi_layers`, `smiles_to_inchi_layers`) that does **not** mangle the formula layer
-- TF-IDF cosine similarity with chemically-aware tokenization (`SMILESTokenizer`)
+- SELFIES conversion (`--selfies`) — 100% robust molecular string representation; all similarity methods apply directly to SELFIES tokens (`SELFIESTokenizer`)
+- TF-IDF cosine similarity with chemically-aware tokenization (`SMILESTokenizer`) — full n-gram grid `smiles_tfidf{m}{n}` / `selfies_tfidf{m}{n}` for m∈{1..6}, n∈{m..6} (best average performance at `(4,4)`)
 - Five additional string metrics: Damerau-Levenshtein, Jaro, Jaro-Winkler, Hamming, and Normalized Compression Distance (NCD)
-- **New in this release:** classical spectrum kernel, mismatch `(k, m)` kernel, query-weighted asymmetric Tversky on LINGOs, Sørensen-Dice on LINGOs, and stand-alone longest-common-substring similarity
+- Classical spectrum kernel, mismatch `(k, m)` kernel, query-weighted asymmetric Tversky on LINGOs, Sørensen-Dice on LINGOs, and stand-alone longest-common-substring similarity
+- Character shuffle (`--shuffle`) for negative-control experiments — destroys chemistry while preserving string length and character composition
+
+
+### Processing pipeline
+
+```
+[READ]    Input always as SMILES (.smi / .csv / .tsv)
+    ↓
+[CONVERT] Select string representation (default: keep SMILES)
+          --inchi [--inchi-layer LAYER]   → InChI string
+          --selfies                       → SELFIES string
+    ↓
+[NORMALIZE] Applied after conversion
+          --canonicalize                  → canonical SMILES (SMILES only, requires rdkit)
+          ELEMENT_REPLACEMENTS            → multi-char atom substitution
+                                            auto ON for SMILES, auto OFF for InChI/SELFIES
+                                            override with --no-preprocess
+    ↓
+[AUGMENT] Applied to the final string, type-agnostic
+          --shuffle [--shuffle-seed SEED] → random character shuffle (negative control)
+    ↓
+[SIMILARITY] All 71 methods available for all string types
+```
+
 
 ## Installation
 
@@ -140,15 +165,20 @@ python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
     --output examples/output.csv --method lingo --inchi --inchi-layer connections
 
-# Convert to SELFIES before comparison (requires selfies)
+# Convert to SELFIES before comparison (requires selfies; ELEMENT_REPLACEMENTS auto-disabled)
 python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
     --output examples/output.csv --method edit --selfies
 
-# Use SELFIES-aware TF-IDF similarity
+# SELFIES-aware TF-IDF (best-performing n-gram range)
 python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
-    --output examples/output.csv --method selfies_tfidf --selfies
+    --output examples/output.csv --method selfies_tfidf44 --selfies
+
+# Shuffle SMILES characters — negative control
+python smiles_similarity_kernels.py \
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method lingo --shuffle --shuffle-seed 42
 
 # List available methods
 python smiles_similarity_kernels.py --list-methods
@@ -215,14 +245,52 @@ Classical string-kernel methods from the biological-sequence literature, ported 
 
 ### TF-IDF (extensions)
 
-| CLI name         | Function                  | Description                                                      | Requires     |
-| ---------------- | ------------------------- | ---------------------------------------------------------------- | ------------ |
-| `smiles_tfidf`   | `smiles_tfidf_similarity` | TF-IDF cosine similarity with chemical tokenization, ngram (1,2) | scikit-learn |
-| `smiles_tfidf13` | `smiles_tfidf_similarity` | TF-IDF cosine similarity with chemical tokenization, ngram (1,3) | scikit-learn |
-| `smiles_tfidf23` | `smiles_tfidf_similarity` | TF-IDF cosine similarity with chemical tokenization, ngram (2,3) | scikit-learn |
-| `smiles_tfidf14` | `smiles_tfidf_similarity` | TF-IDF cosine similarity with chemical tokenization, ngram (1,4) | scikit-learn |
+Two tokenizer-backed TF-IDF families, each covering the full n-gram grid m∈{1..6}, n∈{m..6} (21 combinations per family):
 
-The `SMILESTokenizer` treats multi-character atoms (`Cl`, `Br`, `Si`, …) and `@@` as indivisible tokens, so TF-IDF operates on chemical units rather than raw characters.
+| CLI name pattern      | Function                   | Tokenizer          | Description                                                | Requires     |
+| --------------------- | -------------------------- | ------------------ | ---------------------------------------------------------- | ------------ |
+| `smiles_tfidf`        | `smiles_tfidf_similarity`  | `SMILESTokenizer`  | Alias for `smiles_tfidf12` (backward-compatible default)   | scikit-learn |
+| `smiles_tfidf{m}{n}`  | `smiles_tfidf_similarity`  | `SMILESTokenizer`  | Chemical-token TF-IDF, ngram (m, n); e.g. `smiles_tfidf44` | scikit-learn |
+| `selfies_tfidf`       | `selfies_tfidf_similarity` | `SELFIESTokenizer` | Alias for `selfies_tfidf12` (backward-compatible default)  | scikit-learn |
+| `selfies_tfidf{m}{n}` | `selfies_tfidf_similarity` | `SELFIESTokenizer` | SELFIES-token TF-IDF, ngram (m, n); e.g. `selfies_tfidf44` | scikit-learn |
+
+**Tokenizers:**
+- `SMILESTokenizer` — treats multi-character atoms (`Cl`, `Br`, `Si`, …) and `@@` as indivisible tokens; operates on chemical units rather than raw characters.
+- `SELFIESTokenizer` — splits on `[token]` bracket groups; each SELFIES token is one semantically atomic unit.
+
+**N-gram range selection:** empirical experiments show best average performance around n-gram ranges (3,3)–(5,5), with **(4,4) performing best on average**. Ranges with m=n (single n-gram size) tend to outperform mixed ranges at the same scale.
+
+> **TF-IDF on InChI:** no dedicated InChI tokenizer is provided. When `--inchi` is active, `smiles_tfidf{m}{n}` runs on the InChI string with `preprocess=False` (SMILES substitution is auto-disabled for non-SMILES types), treating InChI characters as raw tokens. This is functional but not semantically optimized for InChI structure.
+
+### SELFIES (extensions)
+
+SELFIES (Self-Referencing Embedded Strings) are a 100% robust molecular representation — every string decodes to a valid molecule. All existing similarity methods apply directly to SELFIES strings; use `--selfies` to convert inputs automatically.
+
+```python
+from smiles_similarity_kernels import smiles_to_selfies, SELFIESTokenizer, selfies_tfidf_similarity
+
+selfies = smiles_to_selfies("CC(=O)Oc1ccccc1C(=O)O")  # aspirin
+# → '[C][C][=Branch1][C][=O][O][C][=C][C][=C][C][=C][Ring1][=A][C][=Branch1][C][=O][O]'
+
+tok = SELFIESTokenizer()
+tok.tokenize(selfies)
+# → ['[C]', '[C]', '[=Branch1]', '[C]', '[=O]', '[O]', ...]
+```
+
+CLI: pass `--selfies` alongside any `--method`. `ELEMENT_REPLACEMENTS` substitution is automatically disabled for SELFIES (and InChI) — it only runs for SMILES. Works with all 71 methods.
+
+### Negative control: character shuffle
+
+`--shuffle` randomly permutes the characters of each SMILES string before comparison, completely destroying chemical meaning while preserving string length and character composition. Use as a baseline to verify that your similarity method captures chemistry rather than string-length artefacts.
+
+```bash
+# Reproducible negative control (fixed seed)
+python smiles_similarity_kernels.py \
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output_shuffled.csv --method lingo --shuffle --shuffle-seed 42
+```
+
+Similarity scores for shuffled inputs should approach random-pair baseline values. A method that scores significantly above baseline on shuffled strings likely has length bias.
 
 ### Additional string metrics (extensions)
 
@@ -329,7 +397,7 @@ python smiles_similarity_kernels.py \
     --output out.csv --method lingo --inchi --inchi-layer formula,connections
 ```
 
-> **Design note:** when `--inchi` is active the CLI automatically sets `preprocess=False` on similarity functions that support it, so that no SMILES-style character substitution is applied to the InChI string. If you call similarity functions directly with InChI input from Python, pass `preprocess=False` explicitly.
+> **Design note:** `ELEMENT_REPLACEMENTS` substitution (`preprocess`) is automatically **on** when string type is SMILES, and **off** for InChI and SELFIES — the pipeline tracks the current string type and sets `preprocess` accordingly. Use `--no-preprocess` to disable it for SMILES (e.g. for benchmarking raw strings). If calling similarity functions directly from Python with InChI or SELFIES, pass `preprocess=False` explicitly.
 
 ## Batch Processing
 
@@ -384,10 +452,13 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `--all-methods`               |       | Run all methods; output named `METHOD_output.csv`                                                                                                   |
 | `--list-methods`              |       | Print all available methods and exit                                                                                                                |
 | `--demo`                      |       | Run a demonstration with example molecules and exit                                                                                                 |
-| `--canonicalize`              |       | Canonicalize SMILES with RDKit before comparison                                                                                                    |
-| `--inchi`                     |       | Convert SMILES to InChI (strips `InChI=` prefix) before comparison                                                                                  |
-| `--inchi-layer LAYER[,...]`   |       | When `--inchi` is used, restrict to selected InChI layer(s). Comma-separated. Default: `all`. See [InChI layer extraction](#inchi-layer-extraction) |
-| `--selfies`                   |       | Convert SMILES to SELFIES before comparison (requires `selfies`). Sets `preprocess=False` automatically.                                            |
+| `--canonicalize`              |       | **[normalize]** Canonicalize SMILES with RDKit (SMILES only, requires rdkit)                                                                        |
+| `--inchi`                     |       | **[convert]** Convert SMILES → InChI (strips `InChI=` prefix, requires rdkit)                                                                       |
+| `--inchi-layer LAYER[,...]`   |       | **[convert]** With `--inchi`, restrict to selected layer(s). Comma-separated. Default: `all`. See [InChI layer extraction](#inchi-layer-extraction)  |
+| `--selfies`                   |       | **[convert]** Convert SMILES → SELFIES (requires `selfies`)                                                                                         |
+| `--no-preprocess`             |       | **[normalize]** Disable `ELEMENT_REPLACEMENTS` substitution for SMILES (auto-disabled for InChI/SELFIES). Useful for benchmarking raw strings.       |
+| `--shuffle`                   |       | **[augment]** Randomly shuffle characters — **negative control**, type-agnostic, applied after all conversions                                      |
+| `--shuffle-seed SEED`         |       | **[augment]** Random seed for `--shuffle` (default: non-reproducible).                                                                              |
 | `--verbose`, `-v`             |       | Print progress                                                                                                                                      |
 | `--templates-smiles-col COL`  |       | SMILES column name/index in templates file                                                                                                          |
 | `--templates-name-col COL`    |       | Name column in templates file                                                                                                                       |
@@ -427,7 +498,7 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `lcs_substring`                                   | O(m×n)         | DP — same cost as `nlcs`                                    |
 | `edit`, `nlcs`, `clcs`                            | O(m×n)         | DP — slow for long SMILES                                   |
 | `substring`                                       | O(m²+n²)       | Can be slow for long SMILES                                 |
-| `smiles_tfidf`                                    | O(corpus)      | Fit once on full corpus for batch use                       |
+| `smiles_tfidf{m}{n}`, `selfies_tfidf{m}{n}`       | O(corpus)      | Fit once on full corpus for batch use; cost grows with n    |
 | `ncd`                                             | O(n log n)     | Compression overhead; fine for millions                     |
 | jellyfish methods                                 | O(n)           | Very fast via C extension                                   |
 
