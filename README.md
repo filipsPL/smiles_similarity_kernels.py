@@ -47,7 +47,7 @@ This module provides **71 similarity methods** for comparing chemical compounds 
 - TF-IDF cosine similarity with chemically-aware tokenization (`SMILESTokenizer`) — full n-gram grid `smiles_tfidf{m}{n}` / `selfies_tfidf{m}{n}` for m∈{1..6}, n∈{m..6} (best average performance at `(4,4)`)
 - Five additional string metrics: Damerau-Levenshtein, Jaro, Jaro-Winkler, Hamming, and Normalized Compression Distance (NCD)
 - Classical spectrum kernel, mismatch `(k, m)` kernel, query-weighted asymmetric Tversky on LINGOs, Sørensen-Dice on LINGOs, and stand-alone longest-common-substring similarity
-- Character shuffle (`--shuffle`) for negative-control experiments — destroys chemistry while preserving string length and character composition
+- Character shuffle (`--shuffle`) and alphabetical sort (`--sort`) for negative-control experiments — both destroy chemistry while preserving string length and character composition; shuffle is random (optional seed), sort is deterministic
 
 
 ### Processing pipeline
@@ -67,6 +67,7 @@ This module provides **71 similarity methods** for comparing chemical compounds 
     ↓
 [AUGMENT] Applied to the final string, type-agnostic
           --shuffle [--shuffle-seed SEED] → random character shuffle (negative control)
+          --sort                          → alphabetical character sort (deterministic negative control)
     ↓
 [SIMILARITY] All 71 methods available for all string types
 ```
@@ -175,10 +176,15 @@ python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
     --output examples/output.csv --method selfies_tfidf44 --selfies
 
-# Shuffle SMILES characters — negative control
+# Shuffle SMILES characters — random negative control
 python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
     --output examples/output.csv --method lingo --shuffle --shuffle-seed 42
+
+# Sort SMILES characters alphabetically — deterministic negative control
+python smiles_similarity_kernels.py \
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method lingo --sort
 
 # List available methods
 python smiles_similarity_kernels.py --list-methods
@@ -279,18 +285,25 @@ tok.tokenize(selfies)
 
 CLI: pass `--selfies` alongside any `--method`. `ELEMENT_REPLACEMENTS` substitution is automatically disabled for SELFIES (and InChI) — it only runs for SMILES. Works with all 71 methods.
 
-### Negative control: character shuffle
+### Negative controls: character shuffle and sort
 
-`--shuffle` randomly permutes the characters of each SMILES string before comparison, completely destroying chemical meaning while preserving string length and character composition. Use as a baseline to verify that your similarity method captures chemistry rather than string-length artefacts.
+Two type-agnostic augmentations are available for negative-control experiments. Both destroy chemical meaning while preserving string length and character composition.
+
+**`--shuffle`** randomly permutes characters (with optional `--shuffle-seed` for reproducibility). Scores should approach random-pair baseline; a method scoring well above baseline likely has length bias.
+
+**`--sort`** sorts characters alphabetically — deterministic, no seed needed. Provides a fixed lower-bound baseline that is identical across runs, useful for comparing runs or methods without variance from randomness.
 
 ```bash
-# Reproducible negative control (fixed seed)
+# Random negative control (reproducible with seed)
 python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
     --output examples/output_shuffled.csv --method lingo --shuffle --shuffle-seed 42
-```
 
-Similarity scores for shuffled inputs should approach random-pair baseline values. A method that scores significantly above baseline on shuffled strings likely has length bias.
+# Deterministic negative control
+python smiles_similarity_kernels.py \
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output_sorted.csv --method lingo --sort
+```
 
 ### Additional string metrics (extensions)
 
@@ -459,6 +472,7 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `--no-preprocess`             |       | **[normalize]** Disable `ELEMENT_REPLACEMENTS` substitution for SMILES (auto-disabled for InChI/SELFIES). Useful for benchmarking raw strings.       |
 | `--shuffle`                   |       | **[augment]** Randomly shuffle characters — **negative control**, type-agnostic, applied after all conversions                                      |
 | `--shuffle-seed SEED`         |       | **[augment]** Random seed for `--shuffle` (default: non-reproducible).                                                                              |
+| `--sort`                      |       | **[augment]** Sort characters alphabetically — **deterministic negative control**, type-agnostic, applied after all conversions                     |
 | `--verbose`, `-v`             |       | Print progress                                                                                                                                      |
 | `--templates-smiles-col COL`  |       | SMILES column name/index in templates file                                                                                                          |
 | `--templates-name-col COL`    |       | Name column in templates file                                                                                                                       |

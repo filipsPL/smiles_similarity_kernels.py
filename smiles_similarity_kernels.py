@@ -33,6 +33,7 @@ Cite all versions by using the DOI 10.5281/zenodo.18457244
 import re
 import os
 import sys
+import time
 import random
 import argparse
 import numpy as np
@@ -574,6 +575,36 @@ def shuffle_smiles(smiles: str, seed: Optional[int] = None) -> str:
     rng = random.Random(seed)
     rng.shuffle(chars)
     return "".join(chars)
+
+
+def sort_string(s: str) -> str:
+    """
+    Sort the characters of a string alphabetically.
+
+    Like :func:`shuffle_smiles`, this is a **negative control** transformation:
+    the result is chemically meaningless but preserves the length and character
+    composition of the input.  Sorting is deterministic (no seed needed), which
+    makes it a reproducible fixed-order baseline complementary to the random
+    shuffle.
+
+    Parameters
+    ----------
+    s : str
+        Input string (SMILES, InChI, SELFIES, or any string representation)
+
+    Returns
+    -------
+    str
+        Character-sorted version of the input string
+
+    Examples
+    --------
+    >>> sort_string("CCO")
+    'CCO'
+    >>> sort_string("c1ccccc1")
+    '1cccccc'
+    """
+    return "".join(sorted(s))
 
 
 def smiles_to_selfies(smiles: str) -> str:
@@ -2940,8 +2971,15 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
         metavar="SEED",
         help="Random seed for --shuffle (default: None = non-reproducible).",
     )
+    aug_group.add_argument(
+        "--sort",
+        action="store_true",
+        help="Sort characters of each string alphabetically (deterministic negative control). "
+        "Destroys chemical meaning while preserving length and character composition.",
+    )
 
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress information")
+    parser.add_argument("--timing-log", default=None, metavar="FILE", help="Append per-method timing rows (CSV) to FILE")
 
     parser.add_argument("--demo", action="store_true", help="Run a demonstration with example molecules and exit")
 
@@ -3112,6 +3150,12 @@ def main():
         template_strings = [shuffle_smiles(s, seed=args.shuffle_seed) for s in template_strings]
         library_strings = [shuffle_smiles(s, seed=args.shuffle_seed) for s in library_strings]
 
+    if args.sort:
+        if args.verbose:
+            print("[augment] sorting strings alphabetically — deterministic negative control")
+        template_strings = [sort_string(s) for s in template_strings]
+        library_strings = [sort_string(s) for s in library_strings]
+
     # ── SIMILARITY (stage 5) ──────────────────────────────────────────────────
     if args.verbose:
         print(f"\nString type: {string_type} | preprocess: {preprocess} | strings: {len(template_strings)} templates, {len(library_strings)} library")
@@ -3141,10 +3185,15 @@ def main():
         extra_kwargs = {"preprocess": preprocess}
 
         try:
+            _t0 = time.perf_counter()
             sim_matrix = compute_cross_similarity_matrix(template_strings, library_strings, method=method, **extra_kwargs)
+            _elapsed = time.perf_counter() - _t0
         except ImportError as exc:
             if args.all_methods:
                 print(f"  [skip] {method}: {exc}", file=sys.stderr)
+                if args.timing_log:
+                    with open(args.timing_log, "a") as _f:
+                        _f.write(f"{method},skip,\n")
                 continue
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -3154,6 +3203,10 @@ def main():
             print(f"Writing output to: {method_output}")
 
         write_similarity_csv(method_output, library_names, template_names, sim_matrix)
+
+        if args.timing_log:
+            with open(args.timing_log, "a") as _f:
+                _f.write(f"{method},ok,{_elapsed:.6f}\n")
 
     if args.verbose:
         if args.all_methods:
