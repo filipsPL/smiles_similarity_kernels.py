@@ -1057,8 +1057,9 @@ def smifp_similarity_cityblock(smiles1: str, smiles2: str, chars: List[str] = No
     if not SCIPY_AVAILABLE:
         raise ImportError("scipy is required for City Block Distance")
 
-    # Note: SMIfp typically doesn't preprocess multi-char elements
-    # as it counts raw SMILES characters
+    if preprocess:
+        smiles1 = preprocess_smiles(smiles1)
+        smiles2 = preprocess_smiles(smiles2)
     fp1 = smiles_to_fingerprint(smiles1, chars)
     fp2 = smiles_to_fingerprint(smiles2, chars)
 
@@ -1089,6 +1090,9 @@ def smifp_similarity_tanimoto(smiles1: str, smiles2: str, chars: List[str] = Non
     float
         Similarity score
     """
+    if preprocess:
+        smiles1 = preprocess_smiles(smiles1)
+        smiles2 = preprocess_smiles(smiles2)
     fp1 = smiles_to_fingerprint(smiles1, chars)
     fp2 = smiles_to_fingerprint(smiles2, chars)
 
