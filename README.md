@@ -34,7 +34,7 @@ Python implementation of SMILES-based compound similarity functions for ligand-b
 
 ## Overview
 
-This module provides **71 similarity methods** for comparing chemical compounds represented as SMILES strings (or InChI/SELFIES strings). It can be used as a Python library or run directly from the command line.
+This module provides **247 similarity methods** for comparing chemical compounds represented as SMILES strings (or InChI/SELFIES strings). It can be used as a Python library or run directly from the command line.
 
 **Key extensions beyond the original Java implementation:**
 - Corrected formulas for NLCS, Edit, LINGO edge cases, and SMIfp
@@ -44,7 +44,7 @@ This module provides **71 similarity methods** for comparing chemical compounds 
 - InChI conversion (`--inchi`) for representation-independent comparison, with optional per-layer selection (`--inchi-layer formula,connections,...`)
 - Layer-respecting InChI preprocessing (`preprocess_inchi`, `extract_inchi_layers`, `smiles_to_inchi_layers`) that does **not** mangle the formula layer
 - SELFIES conversion (`--selfies`) — 100% robust molecular string representation; all similarity methods apply directly to SELFIES tokens (`SELFIESTokenizer`)
-- TF-IDF cosine similarity with chemically-aware tokenization (`SMILESTokenizer`) — full n-gram grid `smiles_tfidf{m}{n}` / `selfies_tfidf{m}{n}` for m∈{1..6}, n∈{m..6} (best average performance at `(4,4)`)
+- TF-IDF cosine similarity with four tokenizer families: `tok-smiles_tfidf{m}{n}` (`SMILESTokenizer`), `tok-schwaller_tfidf{m}{n}` (`SMILESTokenizerSchwaller`, Schwaller et al. atom-level), `tok-bpe_tfidf{m}{n}` (`SMILESTokenizerBPE`, data-driven BPE trained on ChEMBL), and `tok-selfies_tfidf{m}{n}` — full n-gram grid for m∈{1..6}, n∈{m..6} (best average performance at `(4,4)`)
 - Five additional string metrics: Damerau-Levenshtein, Jaro, Jaro-Winkler, Hamming, and Normalized Compression Distance (NCD)
 - Classical spectrum kernel, mismatch `(k, m)` kernel, query-weighted asymmetric Tversky on LINGOs, Sørensen-Dice on LINGOs, and stand-alone longest-common-substring similarity
 - Character shuffle (`--shuffle`) and alphabetical sort (`--sort`) for negative-control experiments — both destroy chemistry while preserving string length and character composition; shuffle is random (optional seed), sort is deterministic
@@ -69,7 +69,7 @@ This module provides **71 similarity methods** for comparing chemical compounds 
           --shuffle [--shuffle-seed SEED] → random character shuffle (negative control)
           --sort                          → alphabetical character sort (deterministic negative control)
     ↓
-[SIMILARITY] All 71 methods available for all string types
+[SIMILARITY] All 247 methods available for all string types
 ```
 
 
@@ -174,7 +174,7 @@ python smiles_similarity_kernels.py \
 # SELFIES-aware TF-IDF (best-performing n-gram range)
 python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
-    --output examples/output.csv --method selfies_tfidf44 --selfies
+    --output examples/output.csv --method tok-selfies_tfidf44 --selfies
 
 # Shuffle SMILES characters — random negative control
 python smiles_similarity_kernels.py \
@@ -251,29 +251,93 @@ Classical string-kernel methods from the biological-sequence literature, ported 
 
 ### TF-IDF (extensions)
 
-Two tokenizer-backed TF-IDF families, each covering the full n-gram grid m∈{1..6}, n∈{m..6} (21 combinations per family):
+Four tokenizer-backed TF-IDF families, each covering the full n-gram grid m∈{1..6}, n∈{m..6} (21 combinations per family):
 
-| CLI name pattern      | Function                   | Tokenizer          | Description                                                | Requires     |
-| --------------------- | -------------------------- | ------------------ | ---------------------------------------------------------- | ------------ |
-| `smiles_tfidf`        | `smiles_tfidf_similarity`  | `SMILESTokenizer`  | Alias for `smiles_tfidf12` (backward-compatible default)   | scikit-learn |
-| `smiles_tfidf{m}{n}`  | `smiles_tfidf_similarity`  | `SMILESTokenizer`  | Chemical-token TF-IDF, ngram (m, n); e.g. `smiles_tfidf44` | scikit-learn |
-| `selfies_tfidf`       | `selfies_tfidf_similarity` | `SELFIESTokenizer` | Alias for `selfies_tfidf12` (backward-compatible default)  | scikit-learn |
-| `selfies_tfidf{m}{n}` | `selfies_tfidf_similarity` | `SELFIESTokenizer` | SELFIES-token TF-IDF, ngram (m, n); e.g. `selfies_tfidf44` | scikit-learn |
+| CLI name pattern            | Function                     | Tokenizer                  | Description                                                             | Requires     |
+| --------------------------- | ---------------------------- | -------------------------- | ----------------------------------------------------------------------- | ------------ |
+| `tok-smiles_tfidf`          | `smiles_tfidf_similarity`    | `SMILESTokenizer`          | Alias for `tok-smiles_tfidf12` (default n-gram range)                   | scikit-learn |
+| `tok-smiles_tfidf{m}{n}`    | `smiles_tfidf_similarity`    | `SMILESTokenizer`          | Chemical-token TF-IDF, ngram (m, n); e.g. `tok-smiles_tfidf44`         | scikit-learn |
+| `tok-schwaller_tfidf`       | `schwaller_tfidf_similarity` | `SMILESTokenizerSchwaller` | Alias for `tok-schwaller_tfidf12` (default n-gram range)                | scikit-learn |
+| `tok-schwaller_tfidf{m}{n}` | `schwaller_tfidf_similarity` | `SMILESTokenizerSchwaller` | Schwaller atom-level TF-IDF, ngram (m, n); e.g. `tok-schwaller_tfidf44` | scikit-learn |
+| `tok-bpe_tfidf`             | `bpe_tfidf_similarity`       | `SMILESTokenizerBPE`       | Alias for `tok-bpe_tfidf12` (uses all merges from vocab file)           | scikit-learn |
+| `tok-bpe_tfidf{m}{n}`       | `bpe_tfidf_similarity`       | `SMILESTokenizerBPE`       | BPE TF-IDF (all merges), ngram (m, n); e.g. `tok-bpe_tfidf44`          | scikit-learn |
+| `tok-bpe{k}_tfidf`          | `bpe_tfidf_similarity`       | `SMILESTokenizerBPE`       | Alias for `tok-bpe{k}_tfidf12`; k ∈ {16, 32, 64, 256, 512, 1024}       | scikit-learn |
+| `tok-bpe{k}_tfidf{m}{n}`    | `bpe_tfidf_similarity`       | `SMILESTokenizerBPE`       | BPE TF-IDF using first k merges, ngram (m, n); e.g. `tok-bpe64_tfidf44` | scikit-learn |
+| `tok-selfies_tfidf`         | `selfies_tfidf_similarity`   | `SELFIESTokenizer`         | Alias for `tok-selfies_tfidf12` (default n-gram range)                  | scikit-learn |
+| `tok-selfies_tfidf{m}{n}`   | `selfies_tfidf_similarity`   | `SELFIESTokenizer`         | SELFIES-token TF-IDF, ngram (m, n); e.g. `tok-selfies_tfidf44`         | scikit-learn |
 
 **Tokenizers:**
-- `SMILESTokenizer` — treats multi-character atoms (`Cl`, `Br`, `Si`, …) and `@@` as indivisible tokens; operates on chemical units rather than raw characters.
+- `SMILESTokenizer` — treats multi-character bare elements (`Cl`, `Br`, `Si`, …) and `@@` as indivisible tokens; everything else is a single character.
+- `SMILESTokenizerSchwaller` — Schwaller et al. (*ACS Central Science* 2019) atom-level tokenization: bracket atoms (`[nH+]`, `[13C@@H]`, …) are single tokens, every bond/branch/stereo symbol is its own token, two-digit ring closures (`%10`) are single tokens. De-facto standard for sequence-to-sequence chemical models.
+- `SMILESTokenizerBPE` — data-driven BPE tokenizer trained on ~1M ChEMBL drug-like molecules. Starts from Schwaller atom-level tokens and iteratively merges the most frequent adjacent pair, producing variable-granularity tokens where common fragments (`C(=O)N`, `c1ccccc1`, …) become single units. Vocabulary JSON produced by `train_bpe_tokenizer.py`. The `num_merges` parameter controls how many merges to apply (default: all), allowing different granularities from a single large vocab file. CLI exposes fixed counts: 16, 32, 64, 256, 512, 1024 (e.g. `tok-bpe64_tfidf44`). **A note**: There is a very similar approach by @XinhaoLi74 [described here](https://github.com/XinhaoLi74/SmilesPE) I was not aware of. See below for details.
 - `SELFIESTokenizer` — splits on `[token]` bracket groups; each SELFIES token is one semantically atomic unit.
+
+##### Notes on SMILESTokenizerBPE tokenizer
+
+It was trained on a set of set of small molecules fetched from ChemBL database on 2026/04/23, preprocessed in KNIME (strip salts, keep organic molecules). A random subsample of 200k molecules was selected, next for each SMILES additional 5 equivalent SMILES were generated using [SMILES-enumeration](https://github.com/EBjerrum/SMILES-enumeration) by @EBjerrum. Resulting training set consisted of 1,199,970 SMILES strings.
+
+The algorithm:
+
+```
+Given: an ordered list of 512 merge pairs, e.g.:
+
+[('c','c'), ('C','C'), ('O',')'), ('c','1'), ('=','O)'), ...]
+For each input SMILES string:
+
+0. Base tokenization — split with the Schwaller regex into atom-level tokens:
+"CC(=O)N" → ['C', 'C', '(', '=', 'O', ')', 'N']
+
+1. Apply merge 1 (c+c → cc): scan left-to-right, replace every adjacent ('c','c') pair with 'cc'. No match here, list unchanged.
+
+2. Apply merge 2 (C+C → CC): find C followed by C at position 0→1, replace:
+['CC', '(', '=', 'O', ')', 'N']
+
+3. Apply merge 3 (O+) → O)): find at positions 3→4:
+['CC', '(', '=', 'O)', 'N']
+
+4. Apply merge 5 (=+O) → =O)): find at positions 2→3:
+['CC', '(', '=O)', 'N']
+
+5. Apply merge 11 (C(+=O) → C(=O)): find at positions 1→2... wait, CC ≠ C(, no match.
+
+6. ... continue through all 512 merges ...
+
+Final result: ['CC(=O)N'] — the whole amide becomes one token after enough merges chain together.
+
+The key property: each merge pass is a single left-to-right scan — O(len(tokens)) per merge, so tokenizing one molecule costs O(512 × len). For a 50-token molecule that's ~25k operations, which is fast. The merge order is critical — earlier (more frequent) merges produce the tokens that later merges can combine further.
+```
+
+
+**Using BPE in Python** (pass `vocab_path` through `vectorizer` for batch use):
+```python
+from sklearn.feature_extraction.text import TfidfVectorizer
+from smiles_similarity_kernels import SMILESTokenizerBPE, bpe_tfidf_similarity
+
+# Use all merges (default) — CLI: tok-bpe_tfidf{m}{n}
+tok = SMILESTokenizerBPE(vocab_path="smiles_bpe_vocab.json")
+
+# Use only first 64 merges (finer tokenization) — CLI: tok-bpe64_tfidf{m}{n}
+tok = SMILESTokenizerBPE(vocab_path="smiles_bpe_vocab.json", num_merges=64)
+
+vec = TfidfVectorizer(tokenizer=tok, analyzer="word", lowercase=False,
+                      token_pattern=None, ngram_range=(1,1), min_df=1, sublinear_tf=True)
+vec.fit(corpus)
+s = bpe_tfidf_similarity(smi1, smi2, vectorizer=vec)
+
+# Or pass num_merges directly (vectorizer built internally)
+s = bpe_tfidf_similarity(smi1, smi2, num_merges=64)
+```
 
 **N-gram range selection:** empirical experiments show best average performance around n-gram ranges (3,3)–(5,5), with **(4,4) performing best on average**. Ranges with m=n (single n-gram size) tend to outperform mixed ranges at the same scale.
 
-> **TF-IDF on InChI:** no dedicated InChI tokenizer is provided. When `--inchi` is active, `smiles_tfidf{m}{n}` runs on the InChI string with `preprocess=False` (SMILES substitution is auto-disabled for non-SMILES types), treating InChI characters as raw tokens. This is functional but not semantically optimized for InChI structure.
+> **TF-IDF on InChI:** no dedicated InChI tokenizer is provided. When `--inchi` is active, `tok-smiles_tfidf{m}{n}` runs on the InChI string with `preprocess=False` (SMILES substitution is auto-disabled for non-SMILES types), treating InChI characters as raw tokens. This is functional but not semantically optimized for InChI structure.
 
 ### SELFIES (extensions)
 
 SELFIES (Self-Referencing Embedded Strings) are a 100% robust molecular representation — every string decodes to a valid molecule. All existing similarity methods apply directly to SELFIES strings; use `--selfies` to convert inputs automatically.
 
 ```python
-from smiles_similarity_kernels import smiles_to_selfies, SELFIESTokenizer, selfies_tfidf_similarity
+from smiles_similarity_kernels import smiles_to_selfies, SELFIESTokenizer, selfies_tfidf_similarity  # CLI: tok-selfies_tfidf{m}{n}
 
 selfies = smiles_to_selfies("CC(=O)Oc1ccccc1C(=O)O")  # aspirin
 # → '[C][C][=Branch1][C][=O][O][C][=C][C][=C][C][=C][Ring1][=A][C][=Branch1][C][=O][O]'
@@ -467,12 +531,13 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `--demo`                      |       | Run a demonstration with example molecules and exit                                                                                                 |
 | `--canonicalize`              |       | **[normalize]** Canonicalize SMILES with RDKit (SMILES only, requires rdkit)                                                                        |
 | `--inchi`                     |       | **[convert]** Convert SMILES → InChI (strips `InChI=` prefix, requires rdkit)                                                                       |
-| `--inchi-layer LAYER[,...]`   |       | **[convert]** With `--inchi`, restrict to selected layer(s). Comma-separated. Default: `all`. See [InChI layer extraction](#inchi-layer-extraction)  |
+| `--inchi-layer LAYER[,...]`   |       | **[convert]** With `--inchi`, restrict to selected layer(s). Comma-separated. Default: `all`. See [InChI layer extraction](#inchi-layer-extraction) |
 | `--selfies`                   |       | **[convert]** Convert SMILES → SELFIES (requires `selfies`)                                                                                         |
-| `--no-preprocess`             |       | **[normalize]** Disable `ELEMENT_REPLACEMENTS` substitution for SMILES (auto-disabled for InChI/SELFIES). Useful for benchmarking raw strings.       |
+| `--no-preprocess`             |       | **[normalize]** Disable `ELEMENT_REPLACEMENTS` substitution for SMILES (auto-disabled for InChI/SELFIES). Useful for benchmarking raw strings.      |
 | `--shuffle`                   |       | **[augment]** Randomly shuffle characters — **negative control**, type-agnostic, applied after all conversions                                      |
 | `--shuffle-seed SEED`         |       | **[augment]** Random seed for `--shuffle` (default: non-reproducible).                                                                              |
 | `--sort`                      |       | **[augment]** Sort characters alphabetically — **deterministic negative control**, type-agnostic, applied after all conversions                     |
+| `--overwrite`                 |       | Overwrite existing output files. Without this flag, existing files are **skipped with a warning** printed to stderr.                                |
 | `--verbose`, `-v`             |       | Print progress                                                                                                                                      |
 | `--templates-smiles-col COL`  |       | SMILES column name/index in templates file                                                                                                          |
 | `--templates-name-col COL`    |       | Name column in templates file                                                                                                                       |
@@ -503,18 +568,18 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 
 ## Performance
 
-| Method                                            | Complexity     | Notes                                                       |
-| ------------------------------------------------- | -------------- | ----------------------------------------------------------- |
-| `lingo`, `lingo_tversky`, `lingo_dice`, `smifp_*` | O(n)           | Fastest — recommended for large-scale screening             |
-| `spectrum`                                        | O(n)           | Very fast, equivalent cost to LINGO                         |
-| `mismatch` (k=4, m=1)                             | O(n·k·\|Σ\|)   | ~20–50× slower than `spectrum` for typical SMILES alphabets |
-| `mismatch` (m≥2)                                  | O(n·k²·\|Σ\|²) | Expensive — use only for short SMILES or small alphabets    |
-| `lcs_substring`                                   | O(m×n)         | DP — same cost as `nlcs`                                    |
-| `edit`, `nlcs`, `clcs`                            | O(m×n)         | DP — slow for long SMILES                                   |
-| `substring`                                       | O(m²+n²)       | Can be slow for long SMILES                                 |
-| `smiles_tfidf{m}{n}`, `selfies_tfidf{m}{n}`       | O(corpus)      | Fit once on full corpus for batch use; cost grows with n    |
-| `ncd`                                             | O(n log n)     | Compression overhead; fine for millions                     |
-| jellyfish methods                                 | O(n)           | Very fast via C extension                                   |
+| Method                                              | Complexity     | Notes                                                       |
+| --------------------------------------------------- | -------------- | ----------------------------------------------------------- |
+| `lingo`, `lingo_tversky`, `lingo_dice`, `smifp_*`   | O(n)           | Fastest — recommended for large-scale screening             |
+| `spectrum`                                          | O(n)           | Very fast, equivalent cost to LINGO                         |
+| `mismatch` (k=4, m=1)                               | O(n·k·\|Σ\|)   | ~20–50× slower than `spectrum` for typical SMILES alphabets |
+| `mismatch` (m≥2)                                    | O(n·k²·\|Σ\|²) | Expensive — use only for short SMILES or small alphabets    |
+| `lcs_substring`                                     | O(m×n)         | DP — same cost as `nlcs`                                    |
+| `edit`, `nlcs`, `clcs`                              | O(m×n)         | DP — slow for long SMILES                                   |
+| `substring`                                         | O(m²+n²)       | Can be slow for long SMILES                                 |
+| `tok-smiles_tfidf{m}{n}`, `tok-selfies_tfidf{m}{n}` | O(corpus)      | Fit once on full corpus for batch use; cost grows with n    |
+| `ncd`                                               | O(n log n)     | Compression overhead; fine for millions                     |
+| jellyfish methods                                   | O(n)           | Very fast via C extension                                   |
 
 
 ## Citation

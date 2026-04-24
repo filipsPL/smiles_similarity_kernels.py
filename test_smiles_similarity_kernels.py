@@ -390,6 +390,173 @@ class TestSMILESTokenizer:
         assert tok("CC") == ["C", "C"]
 
 
+class TestSMILESTokenizerSchwaller:
+    def test_bracket_atom_single_token(self):
+        tokens = m.SMILESTokenizerSchwaller().tokenize("[nH+]")
+        assert tokens == ["[nH+]"]
+
+    def test_bracket_atom_isotope(self):
+        tokens = m.SMILESTokenizerSchwaller().tokenize("[13C]")
+        assert tokens == ["[13C]"]
+
+    def test_chlorine_single_token(self):
+        tokens = m.SMILESTokenizerSchwaller().tokenize("CCCl")
+        assert tokens == ["C", "C", "Cl"]
+
+    def test_bromine_single_token(self):
+        tokens = m.SMILESTokenizerSchwaller().tokenize("CBr")
+        assert tokens == ["C", "Br"]
+
+    def test_bond_symbols_are_tokens(self):
+        tokens = m.SMILESTokenizerSchwaller().tokenize("C=O")
+        assert tokens == ["C", "=", "O"]
+
+    def test_branch_delimiters(self):
+        tokens = m.SMILESTokenizerSchwaller().tokenize("C(=O)O")
+        assert tokens == ["C", "(", "=", "O", ")", "O"]
+
+    def test_two_digit_ring_closure(self):
+        tokens = m.SMILESTokenizerSchwaller().tokenize("C%10CC%10")
+        assert "%10" in tokens
+        assert tokens.count("%10") == 2
+
+    def test_stereo_at_sign(self):
+        tokens = m.SMILESTokenizerSchwaller().tokenize("[C@@H]")
+        assert tokens == ["[C@@H]"]
+
+    def test_callable(self):
+        tok = m.SMILESTokenizerSchwaller()
+        assert tok("CO") == ["C", "O"]
+
+
+@pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="scikit-learn not installed")
+class TestSchwallerTfidfSimilarity:
+    def test_identical(self):
+        assert m.schwaller_tfidf_similarity("CCO", "CCO") == approx(1.0)
+
+    def test_range(self):
+        s = m.schwaller_tfidf_similarity("CCO", "CCOC")
+        assert 0.0 <= s <= 1.0
+
+    def test_bracket_atom_handled(self):
+        s = m.schwaller_tfidf_similarity("[nH+]c1ccccc1", "[nH+]c1ccncc1")
+        assert 0.0 <= s <= 1.0
+
+    def test_ngram_range(self):
+        s = m.schwaller_tfidf_similarity("CCO", "CCOC", ngram_range=(2, 3))
+        assert 0.0 <= s <= 1.0
+
+    def test_differs_from_smiles_tfidf(self):
+        # bracket atom [nH] should be one token in Schwaller, two in original
+        s_schwaller = m.schwaller_tfidf_similarity("c1cc[nH]cc1", "c1ccncc1")
+        s_original  = m.smiles_tfidf_similarity("c1cc[nH]cc1", "c1ccncc1")
+        # scores may differ; both valid
+        assert 0.0 <= s_schwaller <= 1.0
+        assert 0.0 <= s_original  <= 1.0
+
+
+BPE_VOCAB = Path(__file__).parent / "smiles_bpe_vocab.json"
+bpe_vocab_available = pytest.mark.skipif(not BPE_VOCAB.exists(), reason="BPE vocab not found (run train_bpe_tokenizer.py first)")
+
+
+class TestSMILESTokenizerBPE:
+    def test_no_vocab_raises(self):
+        import tempfile, os
+        with pytest.raises(FileNotFoundError):
+            m.SMILESTokenizerBPE(vocab_path="/nonexistent/path/vocab.json")
+
+    @bpe_vocab_available
+    def test_default_vocab_loads(self):
+        tok = m.SMILESTokenizerBPE()
+        assert len(tok._merges) > 0
+
+    @bpe_vocab_available
+    def test_num_merges_slices(self):
+        tok_all = m.SMILESTokenizerBPE()
+        tok_16  = m.SMILESTokenizerBPE(num_merges=16)
+        tok_0   = m.SMILESTokenizerBPE(num_merges=0)
+        assert len(tok_16._merges) == 16
+        assert len(tok_0._merges) == 0
+        assert len(tok_16._merges) <= len(tok_all._merges)
+
+    @bpe_vocab_available
+    def test_num_merges_coarser_tokenization(self):
+        # More merges → fewer, longer tokens
+        smi = "CC(=O)Nc1ccccc1"
+        tok_fine   = m.SMILESTokenizerBPE(num_merges=16)
+        tok_coarse = m.SMILESTokenizerBPE(num_merges=512)
+        assert len(tok_fine.tokenize(smi)) >= len(tok_coarse.tokenize(smi))
+
+    @bpe_vocab_available
+    def test_callable(self):
+        tok = m.SMILESTokenizerBPE()
+        result = tok("CO")
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+    @bpe_vocab_available
+    def test_merges_applied(self):
+        tok = m.SMILESTokenizerBPE()
+        tok._merges = [("C", "C")]
+        assert tok.tokenize("CCC") == ["CC", "C"]
+
+    @bpe_vocab_available
+    def test_merges_chained(self):
+        # Pass 1 (C+C): CCCC -> [CC, CC]; Pass 2 (CC+C): no match (no bare C left)
+        tok = m.SMILESTokenizerBPE()
+        tok._merges = [("C", "C"), ("CC", "C")]
+        assert tok.tokenize("CCCC") == ["CC", "CC"]
+
+    @bpe_vocab_available
+    def test_loads_explicit_vocab_file(self):
+        tok = m.SMILESTokenizerBPE(vocab_path=BPE_VOCAB)
+        assert len(tok._merges) == 512
+
+    @bpe_vocab_available
+    def test_common_fragment_merged(self):
+        tok = m.SMILESTokenizerBPE()
+        assert tok.tokenize("c1ccccc1") == ["c1ccccc1"]
+
+    @bpe_vocab_available
+    def test_amide_merged(self):
+        tok = m.SMILESTokenizerBPE()
+        assert tok.tokenize("CC(=O)N") == ["CC(=O)N"]
+
+    @bpe_vocab_available
+    def test_complex_molecule_split(self):
+        tok = m.SMILESTokenizerBPE()
+        tokens = tok.tokenize("CC(=O)Oc1ccccc1C(=O)O")
+        assert len(tokens) < 20
+        assert len(tokens) > 0
+
+
+@pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="scikit-learn not installed")
+class TestBpeTfidfSimilarity:
+    def test_identical(self):
+        assert m.bpe_tfidf_similarity("CCO", "CCO") == approx(1.0)
+
+    def test_range(self):
+        s = m.bpe_tfidf_similarity("CCO", "CCOC")
+        assert 0.0 <= s <= 1.0
+
+    def test_ngram_range(self):
+        s = m.bpe_tfidf_similarity("CCO", "CCOC", ngram_range=(2, 3))
+        assert 0.0 <= s <= 1.0
+
+    @bpe_vocab_available
+    def test_with_vocab(self):
+        s = m.bpe_tfidf_similarity("CC(=O)Nc1ccccc1", "CC(=O)Nc1ccncc1", vocab_path=BPE_VOCAB)
+        assert 0.0 <= s <= 1.0
+
+    @bpe_vocab_available
+    def test_differs_from_schwaller_tfidf(self):
+        # BPE merges produce different token sets → scores may differ
+        s_bpe = m.bpe_tfidf_similarity("CC(=O)Nc1ccccc1", "CC(=O)Nc1ccncc1", vocab_path=BPE_VOCAB)
+        s_sch = m.schwaller_tfidf_similarity("CC(=O)Nc1ccccc1", "CC(=O)Nc1ccncc1")
+        assert 0.0 <= s_bpe <= 1.0
+        assert 0.0 <= s_sch <= 1.0
+
+
 # ---------------------------------------------------------------------------
 # 11. Jellyfish-based methods
 # ---------------------------------------------------------------------------
@@ -488,16 +655,21 @@ class TestNcdSimilarity:
 # ---------------------------------------------------------------------------
 
 class TestAvailableMethods:
-    _TFIDF_GRID = {f"{prefix}{m}{n}" for m in range(1, 7) for n in range(m, 7)
-                   for prefix in ("smiles_tfidf", "selfies_tfidf")}
+    _BPE_MERGE_COUNTS = (16, 32, 64, 256, 512, 1024)
+    _TFIDF_GRID = (
+        {f"{prefix}{m}{n}" for m in range(1, 7) for n in range(m, 7)
+         for prefix in ("tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe_tfidf", "tok-selfies_tfidf")}
+        | {f"tok-bpe{k}_tfidf{m}{n}" for k in _BPE_MERGE_COUNTS for m in range(1, 7) for n in range(m, 7)}
+    )
     EXPECTED = {
         "edit", "nlcs", "clcs", "substring", "smifp_cbd", "smifp_tanimoto",
         "smifp38_cbd", "smifp38_tanimoto", "lingo", "lingo3", "lingo5",
         "lingo_tversky", "lingo_tversky_sym", "lingo_dice",
         "spectrum", "spectrum3", "spectrum5", "spectrum_cosine",
         "mismatch", "mismatch3", "mismatch5", "lcs_substring",
-        "smiles_tfidf", "selfies_tfidf",        # backward-compat aliases
+        "tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe_tfidf", "tok-selfies_tfidf",
         "damerau_levenshtein", "jaro", "jaro_winkler", "hamming", "ncd",
+        *{f"tok-bpe{k}_tfidf" for k in _BPE_MERGE_COUNTS},
     } | _TFIDF_GRID
 
     def test_all_methods_registered(self):

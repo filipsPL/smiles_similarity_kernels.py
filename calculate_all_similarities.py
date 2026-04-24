@@ -75,7 +75,7 @@ INCHI_LAYERS = [
     "connections",
     "formula",
     "hydrogens",
-    "stereo_tet",
+    # "stereo_tet",
 ]
 
 
@@ -184,6 +184,7 @@ def run_variant(
     variant: dict,
     verbose: bool,
     dry_run: bool,
+    overwrite: bool = False,
 ) -> tuple[bool, str | None, float, list[tuple[str, str, str]]]:
     """
     Run smiles_similarity_kernels.py --all-methods for one variant.
@@ -217,6 +218,8 @@ def run_variant(
     ]
     if verbose:
         cmd.append("--verbose")
+    if overwrite:
+        cmd.append("--overwrite")
 
     if dry_run:
         timing_log.unlink(missing_ok=True)
@@ -268,6 +271,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jobs", "-j", type=int, default=1, metavar="N", help="Run N variants in parallel (default: 1)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show per-method progress inside each variant run")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing them")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files. Without this flag, existing files are skipped with a warning.")
     return parser.parse_args()
 
 
@@ -317,7 +321,7 @@ def main() -> None:
     def _run(variant: dict) -> tuple[str, bool, str | None, float, list]:
         stem = variant_stem(variant)
         print(f"  → [{stem}] {variant['description']}")
-        ok, reason, elapsed, method_rows = run_variant(templates, database, output_dir, variant, args.verbose, args.dry_run)
+        ok, reason, elapsed, method_rows = run_variant(templates, database, output_dir, variant, args.verbose, args.dry_run, args.overwrite)
         if args.dry_run:
             cmd = [
                 sys.executable,

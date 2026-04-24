@@ -33,6 +33,7 @@ Cite all versions by using the DOI 10.5281/zenodo.18457244
 import re
 import os
 import sys
+import json
 import time
 import random
 import argparse
@@ -1735,7 +1736,10 @@ def lingo_tfidf_similarity(smiles1: str, smiles2: str, q: int = 4, corpus: List[
             corpus = [smiles1, smiles2]
 
         vectorizer = LingoVectorizer(q=q, use_idf=True)
-        vectorizer.fit(corpus)
+        try:
+            vectorizer.fit(corpus)
+        except ValueError:
+            return 0.0
 
         vec1 = vectorizer.transform([smiles1])
         vec2 = vectorizer.transform([smiles2])
@@ -1896,7 +1900,10 @@ def smiles_tfidf_similarity(
             min_df=1,
             sublinear_tf=True,
         )
-        vectorizer.fit(corpus)
+        try:
+            vectorizer.fit(corpus)
+        except ValueError:
+            return 0.0
 
     vec1 = vectorizer.transform([smiles1])
     vec2 = vectorizer.transform([smiles2])
@@ -1904,7 +1911,266 @@ def smiles_tfidf_similarity(
 
 
 # ============================================================================
-# 10. SELFIES TF-IDF Cosine Similarity
+# 10. Schwaller TF-IDF Cosine Similarity
+# ============================================================================
+
+
+class SMILESTokenizerSchwaller:
+    """
+    Schwaller-style SMILES tokenizer for use with sklearn TF-IDF.
+
+    Implements the regex-based atom-level tokenization from Schwaller et al.
+    (Molecular Transformer, 2019).  Key differences from :class:`SMILESTokenizer`:
+
+    - Bracket atoms ``[nH+]``, ``[NH3+]``, ``[13C]`` etc. are captured as a
+      single indivisible token (the whole ``[...]`` group).
+    - Bare two-character elements (``Br``, ``Cl``) are single tokens.
+    - Every bond symbol (``=``, ``#``), branch delimiter (``(``, ``)``),
+      ring-closure digit, and stereochemistry marker (``@``, ``/``, ``\\``)
+      is its own token.
+    - ``%dd`` two-digit ring closures are a single token.
+
+    This gives a chemically complete atom-level tokenization that is the
+    de-facto standard in sequence-to-sequence chemical models.
+
+    Reference: Schwaller et al. *ACS Central Science* 2019, 5, 1572–1583.
+    """
+
+    # Schwaller et al. tokenization regex (longest match wins via ordering).
+    # Bracket atoms first, then two-char elements, then single chars/symbols.
+    _TOKEN_RE = re.compile(
+        r"\[[^\]]+\]"  # bracket atom: [nH+], [NH3+], [13C@H], ...
+        r"|Br?"  # Br or bare B
+        r"|Cl?"  # Cl or bare C
+        r"|N|O|S|P|F|I"  # other common single-char bare atoms
+        r"|b|c|n|o|s|p"  # aromatic bare atoms
+        r"|\(|\)"  # branch open/close
+        r"|\.|\=|\#"  # disconnect, double bond, triple bond
+        r"|-|\+"  # charge signs used as bond or in SMARTS
+        r"|\\|/"  # stereo bond directions
+        r"|:|~|@"  # aromatic bond, unspecified, chirality
+        r"|\?|>|\*|\$"  # query atoms / reaction arrow / wildcard
+        r"|\%[0-9]{2}"  # two-digit ring closure %10, %99, ...
+        r"|[0-9]"  # single-digit ring closure
+        r"|."  # catch-all for anything else
+    )
+
+    def tokenize(self, smiles: str) -> List[str]:
+        """Split a SMILES string into Schwaller atom-level tokens."""
+        return self._TOKEN_RE.findall(smiles)
+
+    def __call__(self, smiles: str) -> List[str]:
+        return self.tokenize(smiles)
+
+
+def schwaller_tfidf_similarity(
+    smiles1: str,
+    smiles2: str,
+    corpus: List[str] = None,
+    ngram_range: Tuple[int, int] = (1, 2),
+    vectorizer=None,
+    preprocess: bool = False,
+) -> float:
+    """
+    TF-IDF cosine similarity using Schwaller atom-level tokenization.
+
+    Uses :class:`SMILESTokenizerSchwaller` so that bracket atoms (``[nH+]``,
+    ``[13C]``, …) are indivisible tokens and every bond/branch/stereo symbol
+    is its own token.  This gives a chemically complete atom-level vocabulary
+    consistent with the Molecular Transformer standard.
+
+    The ``preprocess`` argument is accepted for API compatibility but ignored.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+        SMILES strings to compare.
+    corpus : List[str]
+        Corpus used to fit IDF weights.  Defaults to [smiles1, smiles2].
+    ngram_range : Tuple[int, int]
+        N-gram range passed to TfidfVectorizer (default (1, 2)).
+    vectorizer : fitted TfidfVectorizer or None
+        Pre-fitted vectorizer for efficiency in batch use.
+
+    Returns
+    -------
+    float
+        Cosine similarity in [0, 1]
+    """
+    if not SKLEARN_AVAILABLE:
+        raise ImportError("sklearn is required for schwaller_tfidf_similarity")
+
+    if vectorizer is None:
+        if corpus is None:
+            corpus = [smiles1, smiles2]
+        tokenizer = SMILESTokenizerSchwaller()
+        vectorizer = TfidfVectorizer(
+            tokenizer=tokenizer,
+            analyzer="word",
+            lowercase=False,
+            token_pattern=None,
+            ngram_range=ngram_range,
+            min_df=1,
+            sublinear_tf=True,
+        )
+        try:
+            vectorizer.fit(corpus)
+        except ValueError:
+            return 0.0
+
+    vec1 = vectorizer.transform([smiles1])
+    vec2 = vectorizer.transform([smiles2])
+    return float(sklearn_cosine_similarity(vec1, vec2)[0, 0])
+
+
+# ============================================================================
+# 10b. BPE TF-IDF Cosine Similarity
+# ============================================================================
+
+
+# Default BPE vocabulary: smiles_bpe_vocab.json next to this module file.
+_DEFAULT_BPE_VOCAB = Path(__file__).parent / "smiles_bpe_vocab.json"
+
+
+class SMILESTokenizerBPE:
+    """
+    Data-driven BPE tokenizer for use with sklearn TF-IDF.
+
+    Applies the merge table produced by ``train_bpe_tokenizer.py``: starts
+    from the Schwaller atom-level tokens, then greedily applies learned BPE
+    merges in order.  The result is a variable-granularity vocabulary where
+    common fragments (``C(=O)N``, ``c1ccccc1``, …) are single tokens.
+
+    Parameters
+    ----------
+    vocab_path : str or Path or None
+        Path to the JSON vocabulary file written by ``train_bpe_tokenizer.py``.
+        Must contain a ``"merges"`` list of ``[a, b]`` pairs.
+        Defaults to ``smiles_bpe_vocab.json`` in the same directory as this
+        module.  Raises ``FileNotFoundError`` if neither the default file nor
+        an explicit path can be found.
+    """
+
+    # Schwaller base regex (same as SMILESTokenizerSchwaller)
+    _BASE_RE = re.compile(
+        r"\[[^\]]+\]"
+        r"|Br?"
+        r"|Cl?"
+        r"|N|O|S|P|F|I"
+        r"|b|c|n|o|s|p"
+        r"|\(|\)"
+        r"|\.|\=|\#"
+        r"|-|\+"
+        r"|\\|/"
+        r"|:|~|@"
+        r"|\?|>|\*|\$"
+        r"|\%[0-9]{2}"
+        r"|[0-9]"
+        r"|."
+    )
+
+    def __init__(self, vocab_path=None, num_merges=None):
+        path = Path(vocab_path) if vocab_path is not None else _DEFAULT_BPE_VOCAB
+        if not path.exists():
+            raise FileNotFoundError(
+                f"BPE vocabulary file not found: {path}\n"
+                "Train one with train_bpe_tokenizer.py and place it next to "
+                "smiles_similarity_kernels.py, or pass vocab_path= explicitly."
+            )
+        data = json.loads(path.read_text())
+        all_merges: list[tuple[str, str]] = [tuple(pair) for pair in data.get("merges", [])]
+        self._merges = all_merges[:num_merges] if num_merges is not None else all_merges
+
+    def tokenize(self, smiles: str) -> List[str]:
+        """Tokenize a SMILES string using BPE merges."""
+        tokens = self._BASE_RE.findall(smiles)
+        for a, b in self._merges:
+            merged = a + b
+            out = []
+            i = 0
+            while i < len(tokens):
+                if i < len(tokens) - 1 and tokens[i] == a and tokens[i + 1] == b:
+                    out.append(merged)
+                    i += 2
+                else:
+                    out.append(tokens[i])
+                    i += 1
+            tokens = out
+        return tokens
+
+    def __call__(self, smiles: str) -> List[str]:
+        return self.tokenize(smiles)
+
+
+def bpe_tfidf_similarity(
+    smiles1: str,
+    smiles2: str,
+    corpus: List[str] = None,
+    ngram_range: Tuple[int, int] = (1, 2),
+    vectorizer=None,
+    vocab_path=None,
+    num_merges=None,
+    preprocess: bool = False,
+) -> float:
+    """
+    TF-IDF cosine similarity using BPE tokenization trained on ChEMBL.
+
+    Uses :class:`SMILESTokenizerBPE` which applies the learned BPE merge
+    table so that frequent fragments (``C(=O)N``, ``c1ccccc1``, …) become
+    single tokens.  The vocabulary JSON is produced by ``train_bpe_tokenizer.py``.
+
+    The ``preprocess`` argument is accepted for API compatibility but ignored.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+        SMILES strings to compare.
+    corpus : List[str]
+        Corpus used to fit IDF weights.  Defaults to [smiles1, smiles2].
+    ngram_range : Tuple[int, int]
+        N-gram range passed to TfidfVectorizer (default (1, 2)).
+    vectorizer : fitted TfidfVectorizer or None
+        Pre-fitted vectorizer for efficiency in batch use.
+    vocab_path : str or Path or None
+        Path to BPE vocabulary JSON.
+    num_merges : int or None
+        Use only the first ``num_merges`` merges from the vocabulary file.
+        ``None`` (default) uses all merges.  Allows exploring different
+        vocabulary granularities from a single large JSON file.
+
+    Returns
+    -------
+    float
+        Cosine similarity in [0, 1]
+    """
+    if not SKLEARN_AVAILABLE:
+        raise ImportError("sklearn is required for bpe_tfidf_similarity")
+
+    if vectorizer is None:
+        if corpus is None:
+            corpus = [smiles1, smiles2]
+        tokenizer = SMILESTokenizerBPE(vocab_path=vocab_path, num_merges=num_merges)
+        vectorizer = TfidfVectorizer(
+            tokenizer=tokenizer,
+            analyzer="word",
+            lowercase=False,
+            token_pattern=None,
+            ngram_range=ngram_range,
+            min_df=1,
+            sublinear_tf=True,
+        )
+        try:
+            vectorizer.fit(corpus)
+        except ValueError:
+            return 0.0
+
+    vec1 = vectorizer.transform([smiles1])
+    vec2 = vectorizer.transform([smiles2])
+    return float(sklearn_cosine_similarity(vec1, vec2)[0, 0])
+
+
+# ============================================================================
+# 10c. SELFIES TF-IDF Cosine Similarity
 # ============================================================================
 
 
@@ -1983,7 +2249,10 @@ def selfies_tfidf_similarity(
             min_df=1,
             sublinear_tf=True,
         )
-        vectorizer.fit(corpus)
+        try:
+            vectorizer.fit(corpus)
+        except ValueError:
+            return 0.0
 
     vec1 = vectorizer.transform([selfies1])
     vec2 = vectorizer.transform([selfies2])
@@ -2272,7 +2541,7 @@ AVAILABLE_METHODS = {
         "params": {},
     },
     **{
-        f"smiles_tfidf{m}{n}": {
+        f"tok-smiles_tfidf{m}{n}": {
             "function": (lambda _m, _n: lambda s1, s2, **kw: smiles_tfidf_similarity(s1, s2, ngram_range=(_m, _n), **kw))(m, n),
             "description": f"TF-IDF cosine similarity with chemical tokenization (ngram ({m},{n}))",
             "params": {"ngram_range": (m, n)},
@@ -2281,10 +2550,25 @@ AVAILABLE_METHODS = {
         for m in range(1, 7)
         for n in range(m, 7)
     },
-    # Backward-compatible aliases (no numeric suffix = (1,2) default)
-    "smiles_tfidf": {
+    "tok-smiles_tfidf": {
         "function": smiles_tfidf_similarity,
         "description": "TF-IDF cosine similarity with chemical tokenization (ngram (1,2))",
+        "params": {"ngram_range": (1, 2)},
+        "requires": "sklearn",
+    },
+    **{
+        f"tok-schwaller_tfidf{m}{n}": {
+            "function": (lambda _m, _n: lambda s1, s2, **kw: schwaller_tfidf_similarity(s1, s2, ngram_range=(_m, _n), **kw))(m, n),
+            "description": f"TF-IDF cosine similarity with Schwaller atom-level tokenization (ngram ({m},{n}))",
+            "params": {"ngram_range": (m, n)},
+            "requires": "sklearn",
+        }
+        for m in range(1, 7)
+        for n in range(m, 7)
+    },
+    "tok-schwaller_tfidf": {
+        "function": schwaller_tfidf_similarity,
+        "description": "TF-IDF cosine similarity with Schwaller atom-level tokenization (ngram (1,2))",
         "params": {"ngram_range": (1, 2)},
         "requires": "sklearn",
     },
@@ -2318,7 +2602,7 @@ AVAILABLE_METHODS = {
         "params": {},
     },
     **{
-        f"selfies_tfidf{m}{n}": {
+        f"tok-selfies_tfidf{m}{n}": {
             "function": (lambda _m, _n: lambda s1, s2, **kw: selfies_tfidf_similarity(s1, s2, ngram_range=(_m, _n), **kw))(m, n),
             "description": f"TF-IDF cosine similarity on SELFIES tokens (ngram ({m},{n}))",
             "params": {"ngram_range": (m, n)},
@@ -2327,12 +2611,50 @@ AVAILABLE_METHODS = {
         for m in range(1, 7)
         for n in range(m, 7)
     },
-    # Backward-compatible alias (no numeric suffix = (1,2) default)
-    "selfies_tfidf": {
+    "tok-selfies_tfidf": {
         "function": selfies_tfidf_similarity,
         "description": "TF-IDF cosine similarity on SELFIES tokens (ngram (1,2))",
         "params": {"ngram_range": (1, 2)},
         "requires": "sklearn",
+    },
+    **{
+        f"tok-bpe_tfidf{m}{n}": {
+            "function": (lambda _m, _n: lambda s1, s2, **kw: bpe_tfidf_similarity(s1, s2, ngram_range=(_m, _n), **kw))(m, n),
+            "description": f"TF-IDF cosine similarity with BPE tokenization trained on ChEMBL (ngram ({m},{n}))",
+            "params": {"ngram_range": (m, n)},
+            "requires": "sklearn",
+        }
+        for m in range(1, 7)
+        for n in range(m, 7)
+    },
+    "tok-bpe_tfidf": {
+        "function": bpe_tfidf_similarity,
+        "description": "TF-IDF cosine similarity with BPE tokenization trained on ChEMBL (ngram (1,2))",
+        "params": {"ngram_range": (1, 2)},
+        "requires": "sklearn",
+    },
+    # Fixed-merge-count BPE families: tok-bpe{k}_tfidf{m}{n}
+    # Each uses only the first k merges from the vocabulary file, allowing
+    # comparison of tokenization granularities from a single large JSON.
+    **{
+        f"tok-bpe{_k}_tfidf{m}{n}": {
+            "function": (lambda _k, _m, _n: lambda s1, s2, **kw: bpe_tfidf_similarity(s1, s2, ngram_range=(_m, _n), num_merges=_k, **kw))(_k, m, n),
+            "description": f"TF-IDF cosine similarity with BPE tokenization ({_k} merges, ngram ({m},{n}))",
+            "params": {"ngram_range": (m, n), "num_merges": _k},
+            "requires": "sklearn",
+        }
+        for _k in (16, 32, 64, 256, 512, 1024)
+        for m in range(1, 7)
+        for n in range(m, 7)
+    },
+    **{
+        f"tok-bpe{_k}_tfidf": {
+            "function": (lambda _k: lambda s1, s2, **kw: bpe_tfidf_similarity(s1, s2, ngram_range=(1, 2), num_merges=_k, **kw))(_k),
+            "description": f"TF-IDF cosine similarity with BPE tokenization ({_k} merges, ngram (1,2))",
+            "params": {"ngram_range": (1, 2), "num_merges": _k},
+            "requires": "sklearn",
+        }
+        for _k in (16, 32, 64, 256, 512, 1024)
     },
 }
 
@@ -2840,8 +3162,10 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
                    lingo_tversky, lingo_tversky_sym, lingo_dice,
                    spectrum, spectrum3, spectrum5, spectrum_cosine,
                    mismatch, mismatch3, mismatch5, lcs_substring,
-                   smiles_tfidf, smiles_tfidf{m}{n} (m=1..6, n=m..6, e.g. smiles_tfidf44),
-                   selfies_tfidf, selfies_tfidf{m}{n} (m=1..6, n=m..6, e.g. selfies_tfidf44),
+                   tok-smiles_tfidf, tok-smiles_tfidf{m}{n} (m=1..6, n=m..6, e.g. tok-smiles_tfidf44),
+                   tok-schwaller_tfidf, tok-schwaller_tfidf{m}{n} (m=1..6, n=m..6, e.g. tok-schwaller_tfidf44),
+                   tok-bpe_tfidf, tok-bpe_tfidf{m}{n} (m=1..6, n=m..6, e.g. tok-bpe_tfidf44),
+                   tok-selfies_tfidf, tok-selfies_tfidf{m}{n} (m=1..6, n=m..6, e.g. tok-selfies_tfidf44),
                    damerau_levenshtein, jaro, jaro_winkler, hamming, ncd
         """,
     )
@@ -2911,14 +3235,12 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
     convert_ex.add_argument(
         "--inchi",
         action="store_true",
-        help="Convert SMILES → InChI (requires rdkit). "
-        "Strips the 'InChI=1S/' prefix; use --inchi-layer to select a subset of layers.",
+        help="Convert SMILES → InChI (requires rdkit). " "Strips the 'InChI=1S/' prefix; use --inchi-layer to select a subset of layers.",
     )
     convert_ex.add_argument(
         "--selfies",
         action="store_true",
-        help="Convert SMILES → SELFIES (requires selfies). "
-        "All string-similarity methods apply directly to SELFIES bracket tokens.",
+        help="Convert SMILES → SELFIES (requires selfies). " "All string-similarity methods apply directly to SELFIES bracket tokens.",
     )
 
     convert_group.add_argument(
@@ -2980,6 +3302,9 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
 
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress information")
     parser.add_argument("--timing-log", default=None, metavar="FILE", help="Append per-method timing rows (CSV) to FILE")
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing output files. Without this flag, existing files are skipped with a warning."
+    )
 
     parser.add_argument("--demo", action="store_true", help="Run a demonstration with example molecules and exit")
 
@@ -3158,7 +3483,9 @@ def main():
 
     # ── SIMILARITY (stage 5) ──────────────────────────────────────────────────
     if args.verbose:
-        print(f"\nString type: {string_type} | preprocess: {preprocess} | strings: {len(template_strings)} templates, {len(library_strings)} library")
+        print(
+            f"\nString type: {string_type} | preprocess: {preprocess} | strings: {len(template_strings)} templates, {len(library_strings)} library"
+        )
 
     if args.all_methods:
         methods_to_run = list(AVAILABLE_METHODS.keys())
@@ -3181,6 +3508,15 @@ def main():
             print("Calculating similarities...")
             total_comparisons = len(library_strings) * len(template_strings)
             print(f"  Total comparisons: {total_comparisons:,}")
+
+        # Check overwrite before doing any work
+        if Path(method_output).exists():
+            if not args.overwrite:
+                print(f"  [skip] {method_output}: file exists (use --overwrite to replace)", file=sys.stderr)
+                if args.timing_log:
+                    with open(args.timing_log, "a") as _f:
+                        _f.write(f"{method},skip_exists,\n")
+                continue
 
         extra_kwargs = {"preprocess": preprocess}
 
