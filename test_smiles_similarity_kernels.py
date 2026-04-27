@@ -613,7 +613,7 @@ class TestSMILESTokenizerBPE:
     @bpe_vocab_available
     def test_loads_explicit_vocab_file(self):
         tok = m.SMILESTokenizerBPE(vocab_path=BPE_VOCAB)
-        assert len(tok._merges) == 512
+        assert len(tok._merges) == 8192
 
     @bpe_vocab_available
     def test_common_fragment_merged(self):
