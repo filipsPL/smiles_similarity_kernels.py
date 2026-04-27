@@ -635,13 +635,16 @@ class TestSMILESTokenizerBPE:
 
 @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="scikit-learn not installed")
 class TestBpeTfidfSimilarity:
+    @bpe_vocab_available
     def test_identical(self):
         assert m.bpe_tfidf_similarity("CCO", "CCO") == approx(1.0)
 
+    @bpe_vocab_available
     def test_range(self):
         s = m.bpe_tfidf_similarity("CCO", "CCOC")
         assert 0.0 <= s <= 1.0
 
+    @bpe_vocab_available
     def test_ngram_range(self):
         s = m.bpe_tfidf_similarity("CCO", "CCOC", ngram_range=(2, 3))
         assert 0.0 <= s <= 1.0
