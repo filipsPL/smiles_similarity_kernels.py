@@ -668,24 +668,18 @@ def edit_distance(s1: str, s2: str) -> int:
     """
     m, n = len(s1), len(s2)
 
-    # Create distance matrix
-    dp = [[0] * (n + 1) for _ in range(m + 1)]
-
-    # Initialize base cases
-    for i in range(m + 1):
-        dp[i][0] = i
-    for j in range(n + 1):
-        dp[0][j] = j
-
-    # Fill the matrix
+    # Two-row rolling DP — only the previous row is ever needed.
+    prev = list(range(n + 1))
     for i in range(1, m + 1):
+        curr = [i] + [0] * n
         for j in range(1, n + 1):
             if s1[i - 1] == s2[j - 1]:
-                dp[i][j] = dp[i - 1][j - 1]
+                curr[j] = prev[j - 1]
             else:
-                dp[i][j] = 1 + min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])  # deletion  # insertion  # substitution
+                curr[j] = 1 + min(prev[j], curr[j - 1], prev[j - 1])  # deletion  # insertion  # substitution
+        prev = curr
 
-    return dp[m][n]
+    return prev[n]
 
 
 def edit_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float:
@@ -743,16 +737,19 @@ def lcs_length(s1: str, s2: str) -> int:
         Length of LCS
     """
     m, n = len(s1), len(s2)
-    dp = [[0] * (n + 1) for _ in range(m + 1)]
 
+    # Two-row rolling DP — only the previous row is ever needed.
+    prev = [0] * (n + 1)
     for i in range(1, m + 1):
+        curr = [0] * (n + 1)
         for j in range(1, n + 1):
             if s1[i - 1] == s2[j - 1]:
-                dp[i][j] = dp[i - 1][j - 1] + 1
+                curr[j] = prev[j - 1] + 1
             else:
-                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+                curr[j] = max(prev[j], curr[j - 1])
+        prev = curr
 
-    return dp[m][n]
+    return prev[n]
 
 
 def nlcs_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float:
@@ -818,15 +815,18 @@ def mclcsn_length(s1: str, s2: str) -> int:
     if m == 0 or n == 0:
         return 0
 
-    # Dynamic programming for longest common substring
-    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    # Two-row rolling DP — only the previous row is ever needed.
+    prev = [0] * (n + 1)
     max_length = 0
 
     for i in range(1, m + 1):
+        curr = [0] * (n + 1)
         for j in range(1, n + 1):
             if s1[i - 1] == s2[j - 1]:
-                dp[i][j] = dp[i - 1][j - 1] + 1
-                max_length = max(max_length, dp[i][j])
+                curr[j] = prev[j - 1] + 1
+                if curr[j] > max_length:
+                    max_length = curr[j]
+        prev = curr
 
     return max_length
 
@@ -1024,12 +1024,8 @@ def smiles_to_fingerprint(smiles: str, chars: List[str] = None) -> np.ndarray:
     if chars is None:
         chars = SMIFP_CHARS_34
 
-    fp = np.zeros(len(chars), dtype=float)
-
-    for i, char in enumerate(chars):
-        fp[i] = smiles.count(char)
-
-    return fp
+    counts = Counter(smiles)
+    return np.array([counts.get(char, 0) for char in chars], dtype=float)
 
 
 def smifp_similarity_cityblock(smiles1: str, smiles2: str, chars: List[str] = None, preprocess: bool = True) -> float:
@@ -2642,7 +2638,9 @@ AVAILABLE_METHODS = {
     # comparison of tokenization granularities from a single large JSON.
     **{
         f"tok-bpe{_k}_tfidf{m}{n}": {
-            "function": (lambda _k, _m, _n: lambda s1, s2, **kw: bpe_tfidf_similarity(s1, s2, ngram_range=(_m, _n), num_merges=_k, **kw))(_k, m, n),
+            "function": (lambda _k, _m, _n: lambda s1, s2, **kw: bpe_tfidf_similarity(s1, s2, ngram_range=(_m, _n), num_merges=_k, **kw))(
+                _k, m, n
+            ),
             "description": f"TF-IDF cosine similarity with BPE tokenization ({_k} merges, ngram ({m},{n}))",
             "params": {"ngram_range": (m, n), "num_merges": _k},
             "requires": "sklearn",
@@ -2701,6 +2699,88 @@ def get_similarity_function(method: str) -> Callable:
 # ============================================================================
 
 
+def _build_batch_kwargs(sim_func, method: str, corpus: List[str], kwargs: dict) -> dict:
+    """
+    Prepare kwargs for batch similarity calls:
+    - filter to parameters the function actually accepts
+    - preprocess the corpus once and set preprocess=False
+    - for TF-IDF methods, fit a single vectorizer on the full corpus
+    """
+    import inspect
+
+    try:
+        params = inspect.signature(sim_func).parameters
+        accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        filtered = kwargs if accepts_kwargs else {k: v for k, v in kwargs.items() if k in params}
+    except (TypeError, ValueError):
+        filtered = {}
+        params = {}
+
+    # Preprocess each string once rather than once per pair.
+    if filtered.get("preprocess", True) and "preprocess" in params:
+        corpus[:] = [preprocess_smiles(s) for s in corpus]
+        filtered = {**filtered, "preprocess": False}
+
+    # For TF-IDF methods, fit one vectorizer on the full corpus so IDF weights
+    # reflect the whole dataset rather than each individual pair.
+    if "tfidf" in method and "vectorizer" not in filtered:
+        _tfidf_funcs = {
+            "smiles": smiles_tfidf_similarity,
+            "schwaller": schwaller_tfidf_similarity,
+            "bpe": bpe_tfidf_similarity,
+            "selfies": selfies_tfidf_similarity,
+            "lingo": lingo_tfidf_similarity,
+        }
+        underlying = next((fn for key, fn in _tfidf_funcs.items() if key in method), None)
+        if underlying is not None and SKLEARN_AVAILABLE:
+            extra = {k: v for k, v in filtered.items() if k not in ("vectorizer", "corpus", "preprocess")}
+            try:
+                # Fit by passing the full corpus; discard the returned score.
+                underlying(corpus[0], corpus[0], corpus=corpus, **extra)
+                # The fitted vectorizer lives inside the closure — we need it directly.
+                # Build it the same way the similarity function does.
+                from sklearn.feature_extraction.text import TfidfVectorizer as _TV
+
+                tok_map = {
+                    "smiles": SMILESTokenizer,
+                    "schwaller": SMILESTokenizerSchwaller,
+                    "selfies": SELFIESTokenizer,
+                }
+                if "bpe" in method:
+                    num_merges = filtered.get("num_merges", None)
+                    tokenizer = SMILESTokenizerBPE(num_merges=num_merges)
+                elif "lingo" in method:
+                    tokenizer = None  # LingoVectorizer has its own fit path
+                else:
+                    tok_cls = next((cls for key, cls in tok_map.items() if key in method), None)
+                    tokenizer = tok_cls() if tok_cls else None
+
+                if "lingo" in method:
+                    q = filtered.get("q", 4)
+                    vec = LingoVectorizer(q=q, use_idf=True)
+                    vec.fit(corpus)
+                elif tokenizer is not None:
+                    ngram_range = filtered.get("ngram_range", (1, 2))
+                    vec = _TV(
+                        tokenizer=tokenizer,
+                        analyzer="word",
+                        lowercase=False,
+                        token_pattern=None,
+                        ngram_range=ngram_range,
+                        min_df=1,
+                        sublinear_tf=True,
+                    )
+                    vec.fit(corpus)
+                else:
+                    vec = None
+                if vec is not None:
+                    filtered = {**filtered, "vectorizer": vec}
+            except Exception:
+                pass  # Fall back to per-pair fitting if anything goes wrong.
+
+    return filtered, corpus
+
+
 def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", **kwargs) -> np.ndarray:
     """
     Compute pairwise similarity matrix for a list of SMILES.
@@ -2724,20 +2804,12 @@ def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", **k
     np.ndarray
         n x n similarity matrix
     """
-    import inspect
-
     n = len(smiles_list)
     sim_matrix = np.zeros((n, n))
 
     sim_func = get_similarity_function(method)
-
-    # Filter kwargs to those the function actually accepts.
-    try:
-        params = inspect.signature(sim_func).parameters
-        accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-        filtered_kwargs = kwargs if accepts_kwargs else {k: v for k, v in kwargs.items() if k in params}
-    except (TypeError, ValueError):
-        filtered_kwargs = {}
+    smiles_list = list(smiles_list)
+    filtered_kwargs, smiles_list = _build_batch_kwargs(sim_func, method, smiles_list, kwargs)
 
     for i in range(n):
         sim_matrix[i, i] = 1.0  # Self-similarity
@@ -2774,22 +2846,15 @@ def compute_cross_similarity_matrix(templates: List[str], library: List[str], me
     np.ndarray
         len(library) x len(templates) similarity matrix
     """
-    import inspect
-
     n_lib = len(library)
     n_templates = len(templates)
     sim_matrix = np.zeros((n_lib, n_templates))
 
     sim_func = get_similarity_function(method)
-
-    # Filter kwargs to those the function actually accepts.  Lambdas in
-    # the registry don't expose kwargs; in that case we drop them all.
-    try:
-        params = inspect.signature(sim_func).parameters
-        accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-        filtered_kwargs = kwargs if accepts_kwargs else {k: v for k, v in kwargs.items() if k in params}
-    except (TypeError, ValueError):
-        filtered_kwargs = {}
+    corpus = list(templates) + list(library)
+    filtered_kwargs, corpus = _build_batch_kwargs(sim_func, method, corpus, kwargs)
+    templates = corpus[:n_templates]
+    library = corpus[n_templates:]
 
     for i, lib_smiles in enumerate(library):
         for j, template_smiles in enumerate(templates):
