@@ -2444,6 +2444,284 @@ def ncd_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float
 
 
 # ============================================================================
+# Fingerprint Functions
+# ============================================================================
+#
+# Each fingerprint function has the signature:
+#   fp_func(smiles: str, **kwargs) -> np.ndarray
+#
+# The returned array is always 1-D and float64.  Binary fingerprints use
+# 0.0 / 1.0 values; count fingerprints use non-negative integer counts
+# stored as float64 for uniform downstream handling.
+#
+# All fingerprints are deterministic and corpus-free: they can be computed
+# for a single molecule without fitting on a dataset.
+
+
+def smifp_fingerprint(
+    smiles: str,
+    chars: List[str] = None,
+    binary: bool = False,
+    preprocess: bool = True,
+) -> np.ndarray:
+    """
+    SMIfp character-frequency fingerprint (34D or 38D).
+
+    Wraps :func:`smiles_to_fingerprint` as a standalone fingerprint function
+    compatible with :data:`AVAILABLE_FINGERPRINTS`.
+
+    Parameters
+    ----------
+    smiles : str
+        Input SMILES string.
+    chars : List[str] or None
+        Character set to count.  Defaults to :data:`SMIFP_CHARS_34` (34D).
+        Pass :data:`SMIFP_CHARS_38` for the extended 38D variant.
+    binary : bool
+        If True, binarise the count vector (count > 0 → 1).
+    preprocess : bool
+        Replace multi-character atoms before counting.
+
+    Returns
+    -------
+    np.ndarray
+        1-D float64 array of length ``len(chars)``.
+    """
+    if chars is None:
+        chars = SMIFP_CHARS_34
+    if preprocess:
+        smiles = preprocess_smiles(smiles)
+    fp = smiles_to_fingerprint(smiles, chars)
+    if binary:
+        fp = (fp > 0).astype(float)
+    return fp
+
+
+def bpe_pattern_fingerprint(
+    smiles: str,
+    vocab_path=None,
+    num_merges: Optional[int] = None,
+    binary: bool = False,
+) -> np.ndarray:
+    """
+    BPE-pattern count fingerprint.
+
+    Uses the merge table from a BPE vocabulary JSON (produced by
+    ``train_bpe_tokenizer.py``) as a fixed pattern dictionary.  Each
+    dimension corresponds to one *merged* token (base single-character
+    tokens are excluded — they are nearly always present and are already
+    captured by SMIfp).  The value is how many times that merged token
+    appears in the Schwaller-tokenized SMILES after all BPE merges up to
+    ``num_merges`` have been applied.
+
+    The fingerprint is:
+
+    - **deterministic** — no corpus required at inference time
+    - **fixed-length** — always ``num_merges`` (or total merges if None) dimensions
+    - **corpus-free** — patterns were learned from ChEMBL but applied to any SMILES
+    - **complementary to SMIfp** — focuses on multi-atom fragments, not raw characters
+
+    Parameters
+    ----------
+    smiles : str
+        Input SMILES string.
+    vocab_path : str or Path or None
+        Path to the BPE vocabulary JSON file.  Defaults to
+        ``smiles_bpe_vocab.json`` in the same directory as this module.
+    num_merges : int or None
+        Use only the first ``num_merges`` merges (and thus only that many
+        dimensions).  ``None`` uses all merges in the file.
+    binary : bool
+        If True, binarise the count vector (count > 0 → 1).
+
+    Returns
+    -------
+    np.ndarray
+        1-D float64 array of length ``num_merges`` (or total merges).
+
+    Notes
+    -----
+    The BPE tokenizer applies merges greedily in order.  A merged token
+    ``"C(=O)N"`` only appears if the full fragment is present contiguously
+    in the token stream after all prior merges have been applied.  This
+    means rare merged tokens at the end of the merge list are only set for
+    molecules that contain the exact corresponding substructure.
+    """
+    path = Path(vocab_path) if vocab_path is not None else _DEFAULT_BPE_VOCAB
+    if not path.exists():
+        raise FileNotFoundError(
+            f"BPE vocabulary file not found: {path}\n"
+            "Train one with train_bpe_tokenizer.py or pass vocab_path= explicitly."
+        )
+    data = json.loads(path.read_text())
+    all_merges: list = [tuple(pair) for pair in data.get("merges", [])]
+    merges = all_merges[:num_merges] if num_merges is not None else all_merges
+
+    # Build the merged token vocabulary (one dimension per merge).
+    merged_tokens = [a + b for a, b in merges]
+
+    # Tokenize using BPE (same logic as SMILESTokenizerBPE.tokenize).
+    _base_re = SMILESTokenizerBPE._BASE_RE
+    tokens = _base_re.findall(smiles)
+    for a, b in merges:
+        ab = a + b
+        out = []
+        i = 0
+        while i < len(tokens):
+            if i < len(tokens) - 1 and tokens[i] == a and tokens[i + 1] == b:
+                out.append(ab)
+                i += 2
+            else:
+                out.append(tokens[i])
+                i += 1
+        tokens = out
+
+    # Count occurrences of each merged token.
+    token_counts = Counter(tokens)
+    fp = np.array([float(token_counts.get(tok, 0)) for tok in merged_tokens], dtype=float)
+    if binary:
+        fp = (fp > 0).astype(float)
+    return fp
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint registry
+# ---------------------------------------------------------------------------
+#
+# Each entry:
+#   "function"    : (smiles, **kwargs) -> np.ndarray
+#   "description" : str
+#   "length"      : int or None (None = depends on vocab / num_merges)
+#   "params"      : dict of fixed kwargs forwarded to the function
+#   "requires"    : optional str, dependency flag name (same as AVAILABLE_METHODS)
+
+AVAILABLE_FINGERPRINTS: Dict[str, dict] = {
+    # ── SMIfp ────────────────────────────────────────────────────────────────
+    "smifp34": {
+        "function": smifp_fingerprint,
+        "description": "SMIfp 34D character-frequency fingerprint (count)",
+        "length": 34,
+        "params": {"chars": SMIFP_CHARS_34, "binary": False},
+    },
+    "smifp34_binary": {
+        "function": lambda smi, **kw: smifp_fingerprint(smi, chars=SMIFP_CHARS_34, binary=True, **kw),
+        "description": "SMIfp 34D binary fingerprint (presence/absence)",
+        "length": 34,
+        "params": {},
+    },
+    "smifp38": {
+        "function": lambda smi, **kw: smifp_fingerprint(smi, chars=SMIFP_CHARS_38, binary=False, **kw),
+        "description": "SMIfp extended character-frequency fingerprint (count); 34D - '%' + '/', '\\\\', '@@'",
+        "length": len(SMIFP_CHARS_38),
+        "params": {},
+    },
+    "smifp38_binary": {
+        "function": lambda smi, **kw: smifp_fingerprint(smi, chars=SMIFP_CHARS_38, binary=True, **kw),
+        "description": "SMIfp extended binary fingerprint (presence/absence); 34D - '%' + '/', '\\\\', '@@'",
+        "length": len(SMIFP_CHARS_38),
+        "params": {},
+    },
+    # ── BPE pattern fingerprints ─────────────────────────────────────────────
+    "bpe_count": {
+        "function": bpe_pattern_fingerprint,
+        "description": "BPE-pattern count fingerprint (all merges, count)",
+        "length": None,
+        "params": {"binary": False},
+    },
+    "bpe_binary": {
+        "function": lambda smi, **kw: bpe_pattern_fingerprint(smi, binary=True, **kw),
+        "description": "BPE-pattern binary fingerprint (all merges, presence/absence)",
+        "length": None,
+        "params": {},
+    },
+    # Fixed-merge-count BPE variants
+    **{
+        f"bpe{k}_count": {
+            "function": (lambda _k: lambda smi, **kw: bpe_pattern_fingerprint(smi, num_merges=_k, binary=False, **kw))(k),
+            "description": f"BPE-pattern count fingerprint ({k} merges)",
+            "length": k,
+            "params": {"num_merges": k},
+        }
+        for k in (16, 32, 64, 128, 256, 512, 1024)
+    },
+    **{
+        f"bpe{k}_binary": {
+            "function": (lambda _k: lambda smi, **kw: bpe_pattern_fingerprint(smi, num_merges=_k, binary=True, **kw))(k),
+            "description": f"BPE-pattern binary fingerprint ({k} merges)",
+            "length": k,
+            "params": {"num_merges": k},
+        }
+        for k in (16, 32, 64, 128, 256, 512, 1024)
+    },
+}
+
+
+def get_fingerprint_function(fp_type: str):
+    """Return the fingerprint function for *fp_type*, checking availability."""
+    if fp_type not in AVAILABLE_FINGERPRINTS:
+        raise ValueError(
+            f"Unknown fingerprint type: '{fp_type}'. "
+            f"Available: {list(AVAILABLE_FINGERPRINTS.keys())}"
+        )
+    entry = AVAILABLE_FINGERPRINTS[fp_type]
+    req = entry.get("requires")
+    if req == "sklearn" and not SKLEARN_AVAILABLE:
+        raise ImportError(f"Fingerprint '{fp_type}' requires scikit-learn")
+    return entry["function"]
+
+
+def compute_fingerprint_matrix(
+    smiles_list: List[str],
+    fp_type: str = "bpe_count",
+    names: List[str] = None,
+    **kwargs,
+) -> Tuple[np.ndarray, List[str]]:
+    """
+    Compute fingerprints for a list of SMILES strings.
+
+    Parameters
+    ----------
+    smiles_list : List[str]
+        Input SMILES strings.
+    fp_type : str
+        Fingerprint type key from :data:`AVAILABLE_FINGERPRINTS`.
+    names : List[str] or None
+        Molecule names (used only for the returned list; not required).
+    **kwargs
+        Extra kwargs forwarded to the fingerprint function (e.g.
+        ``vocab_path``, ``num_merges``).
+
+    Returns
+    -------
+    matrix : np.ndarray
+        Shape ``(n_molecules, n_bits)``.
+    feature_names : List[str]
+        Feature labels (``"bit_0"``, ``"bit_1"``, …) or BPE token strings
+        when applicable.
+    """
+    fp_func = get_fingerprint_function(fp_type)
+    fps = [fp_func(smi, **kwargs) for smi in smiles_list]
+    matrix = np.vstack(fps)
+    feature_names = [f"bit_{i}" for i in range(matrix.shape[1])]
+    return matrix, feature_names
+
+
+def write_fingerprint_csv(
+    output_path: str,
+    molecule_names: List[str],
+    matrix: np.ndarray,
+    feature_names: List[str],
+    fp_type: str,
+) -> None:
+    """Write fingerprint matrix to CSV (rows = molecules, columns = bits)."""
+    cols = {"Name": molecule_names}
+    for i, fname in enumerate(feature_names):
+        cols[fname] = matrix[:, i]
+    df = pd.DataFrame(cols)
+    df.to_csv(output_path, index=False, float_format="%.0f")
+
+
+# ============================================================================
 # Available Methods Registry
 # ============================================================================
 
@@ -3369,6 +3647,30 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
         "Destroys chemical meaning while preserving length and character composition.",
     )
 
+    # ── FINGERPRINT ────────────────────────────────────────────────────────────
+    fp_group = parser.add_argument_group(
+        "Fingerprint mode",
+        "Instead of computing pairwise similarities, compute a fixed-length "
+        "fingerprint for each molecule in --database and write one row per "
+        "molecule to --output.  --templates is not required in this mode.",
+    )
+    fp_group.add_argument(
+        "--fingerprint",
+        type=str,
+        default=None,
+        metavar="TYPE",
+        choices=list(AVAILABLE_FINGERPRINTS.keys()),
+        help=(
+            "Compute fingerprints instead of similarities. "
+            "TYPE is one of: " + ", ".join(AVAILABLE_FINGERPRINTS.keys())
+        ),
+    )
+    fp_group.add_argument(
+        "--list-fingerprints",
+        action="store_true",
+        help="List available fingerprint types and exit.",
+    )
+
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress information")
     parser.add_argument("--timing-log", default=None, metavar="FILE", help="Append per-method timing rows (CSV) to FILE")
     parser.add_argument(
@@ -3419,6 +3721,92 @@ def main():
             req = f" (requires {info.get('requires', 'nothing')})" if "requires" in info else ""
             print(f"  {name:20s} - {info['description']}{req}")
         print()
+        return
+
+    # List fingerprint types if requested
+    if args.list_fingerprints:
+        print("\nAvailable fingerprint types:")
+        print("-" * 60)
+        for name, info in AVAILABLE_FINGERPRINTS.items():
+            length = info.get("length")
+            length_str = f"{length}D" if length is not None else "variable-length"
+            req = f" (requires {info.get('requires', 'nothing')})" if "requires" in info else ""
+            print(f"  {name:25s} [{length_str:>14s}] - {info['description']}{req}")
+        print()
+        return
+
+    # ── FINGERPRINT MODE ──────────────────────────────────────────────────────
+    if args.fingerprint is not None:
+        if not args.database or not args.output:
+            print("Error: --fingerprint requires --database and --output", file=sys.stderr)
+            sys.exit(1)
+
+        database_smiles_col = _parse_col_arg(args.database_smiles_col)
+        database_name_col = _parse_col_arg(args.database_name_col)
+        library = read_molecules_from_source(
+            args.database,
+            smiles_col=database_smiles_col,
+            name_col=database_name_col,
+            delimiter=args.database_delimiter,
+            header=None if not args.database_no_header else False,
+        )
+        if not library:
+            print(f"Error: No molecules found in database source: {args.database}", file=sys.stderr)
+            sys.exit(1)
+
+        lib_names = list(library.keys())
+        lib_smiles = [library[n] for n in lib_names]
+
+        # Apply the same convert / normalize / augment pipeline as similarity mode.
+        string_type = "smiles"
+        if args.inchi:
+            if not RDKIT_AVAILABLE:
+                print("Error: --inchi requires rdkit.", file=sys.stderr)
+                sys.exit(1)
+            layers_arg = [s.strip() for s in args.inchi_layer.split(",") if s.strip()]
+            layers_for_convert = "all" if layers_arg == ["all"] else layers_arg
+            lib_smiles = [smiles_to_inchi_layers(s, layers_for_convert) or s for s in lib_smiles]
+            string_type = "inchi"
+        elif args.selfies:
+            if not SELFIES_AVAILABLE:
+                print("Error: --selfies requires selfies.", file=sys.stderr)
+                sys.exit(1)
+            lib_smiles = [smiles_to_selfies(s) or s for s in lib_smiles]
+            string_type = "selfies"
+
+        if args.canonicalize:
+            if string_type == "smiles":
+                if not RDKIT_AVAILABLE:
+                    print("Error: --canonicalize requires rdkit.", file=sys.stderr)
+                    sys.exit(1)
+                lib_smiles = [canonicalize_smiles(s) for s in lib_smiles]
+
+        if args.shuffle:
+            lib_smiles = [shuffle_smiles(s, seed=args.shuffle_seed) for s in lib_smiles]
+        if args.sort:
+            lib_smiles = [sort_string(s) for s in lib_smiles]
+
+        if Path(args.output).exists() and not args.overwrite:
+            print(f"[skip] {args.output}: file exists (use --overwrite to replace)", file=sys.stderr)
+            sys.exit(0)
+
+        if args.verbose:
+            print(f"Computing {args.fingerprint} fingerprints for {len(lib_smiles):,} molecules …")
+
+        try:
+            fp_func = get_fingerprint_function(args.fingerprint)
+            fps = [fp_func(smi) for smi in lib_smiles]
+        except (ImportError, FileNotFoundError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        matrix = np.vstack(fps)
+        n_bits = matrix.shape[1]
+        feature_names = [f"bit_{i}" for i in range(n_bits)]
+        write_fingerprint_csv(args.output, lib_names, matrix, feature_names, args.fingerprint)
+
+        if args.verbose:
+            print(f"Wrote {n_bits}-bit fingerprints for {len(lib_names):,} molecules to {args.output}")
         return
 
     # Check required arguments

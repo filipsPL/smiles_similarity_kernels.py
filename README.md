@@ -2,7 +2,7 @@
 
 ## **tl;dr**
 
-calculate molecular similarity based on SMILES strings only, using multiple similarity measures (eg for VS):
+❶ calculate molecular similarity based on SMILES strings only, using multiple similarity measures (eg for VS):
 
 ```bash
 # Calculate similarities between templates and library molecules
@@ -20,6 +20,27 @@ python smiles_similarity_kernels.py \
 # ...
 ```
 
+❷ calculate SMILES fingerprints (for ML or VS):
+
+```bash
+# BPE 512-bit binary fingerprint
+python smiles_similarity_kernels.py \
+    --fingerprint bpe512_binary \
+    --database examples/database.smi \
+    --output examples/fingerprints_bpe.csv
+
+# $ cat examples/fingerprints_bpe.csv
+# Name,bit_0,bit_1,bit_2,bit_3,bit_4,bit_5,bit_6,bit_7 [...]
+# 0054-0090,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0
+# 0061-0013,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0
+# 0062-0039,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+# 0082-0017,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0
+# 0083-0114,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0
+# 0086-0080,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0
+# [...]
+
+```
+
 ## About
 
 Python implementation of SMILES-based compound similarity functions for ligand-based virtual screening. Partially inspired by the methods described in Öztürk et al. (2016) which were originally implemented in Java. This library re-implements, corrects, and substantially extends that work with additional algorithms, chemically-aware preprocessing, SMILES canonicalization, InChI support, and new string-similarity methods not present in the original. And more, as work is in progress.
@@ -31,12 +52,12 @@ Python implementation of SMILES-based compound similarity functions for ligand-b
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18457244.svg)](https://doi.org/10.5281/zenodo.18457244)
 
-
 ## Overview
 
 This module provides **247 similarity methods** for comparing chemical compounds represented as SMILES strings (or InChI/SELFIES strings). It can be used as a Python library or run directly from the command line.
 
 **Key extensions beyond the original Java implementation:**
+
 - Corrected formulas for NLCS, Edit, LINGO edge cases, and SMIfp
 - Expanded multi-character element encoding covering stereochemistry (`@@`, `@TH1`…), rare metals, and lanthanides
 - Regex-based preprocessing (safe longest-match, no sequential-replace corruption)
@@ -49,10 +70,13 @@ This module provides **247 similarity methods** for comparing chemical compounds
 - Classical spectrum kernel, mismatch `(k, m)` kernel, query-weighted asymmetric Tversky on LINGOs, Sørensen-Dice on LINGOs, and stand-alone longest-common-substring similarity
 - Character shuffle (`--shuffle`) and alphabetical sort (`--sort`) for negative-control experiments — both destroy chemistry while preserving string length and character composition; shuffle is random (optional seed), sort is deterministic
 
+**SMILES fingerprints**:
+
+- brand new, fixed-length fingerprint vectors for each molecule — suitable as ML feature matrices, for clustering, or for direct comparison with other fingerprint-based tools
 
 ### Processing pipeline
 
-```
+```text
 [READ]    Input always as SMILES (.smi / .csv / .tsv)
     ↓
 [CONVERT] Select string representation (default: keep SMILES)
@@ -71,7 +95,6 @@ This module provides **247 similarity methods** for comparing chemical compounds
     ↓
 [SIMILARITY] All 247 methods available for all string types
 ```
-
 
 ## Installation
 
@@ -194,6 +217,7 @@ python smiles_similarity_kernels.py --demo
 ```
 
 Expected output format:
+
 ```
 Name,Similarity_0054-0090,Similarity_0133-0086
 0054-0090,1.00000,0.39080
@@ -267,6 +291,7 @@ Four tokenizer-backed TF-IDF families, each covering the full n-gram grid m∈{1
 | `tok-selfies_tfidf{m}{n}`   | `selfies_tfidf_similarity`   | `SELFIESTokenizer`         | SELFIES-token TF-IDF, ngram (m, n); e.g. `tok-selfies_tfidf44`         | scikit-learn |
 
 **Tokenizers:**
+
 - `SMILESTokenizer` — treats multi-character bare elements (`Cl`, `Br`, `Si`, …) and `@@` as indivisible tokens; everything else is a single character.
 - `SMILESTokenizerSchwaller` — Schwaller et al. (*ACS Central Science* 2019) atom-level tokenization: bracket atoms (`[nH+]`, `[13C@@H]`, …) are single tokens, every bond/branch/stereo symbol is its own token, two-digit ring closures (`%10`) are single tokens. De-facto standard for sequence-to-sequence chemical models.
 - `SMILESTokenizerBPE` — data-driven BPE tokenizer trained on ~1M ChEMBL drug-like molecules. Starts from Schwaller atom-level tokens and iteratively merges the most frequent adjacent pair, producing variable-granularity tokens where common fragments (`C(=O)N`, `c1ccccc1`, …) become single units. Vocabulary JSON produced by `train_bpe_tokenizer.py`. The `num_merges` parameter controls how many merges to apply (default: all), allowing different granularities from a single large vocab file. CLI exposes fixed counts: 16, 32, 64, 256, 512, 1024 (e.g. `tok-bpe64_tfidf44`). **A note**: There is a very similar approach by @XinhaoLi74 [described here](https://github.com/XinhaoLi74/SmilesPE) I was not aware of. See below for details.
@@ -307,8 +332,8 @@ Final result: ['CC(=O)N'] — the whole amide becomes one token after enough mer
 The key property: each merge pass is a single left-to-right scan — O(len(tokens)) per merge, so tokenizing one molecule costs O(512 × len). For a 50-token molecule that's ~25k operations, which is fast. The merge order is critical — earlier (more frequent) merges produce the tokens that later merges can combine further.
 ```
 
-
 **Using BPE in Python** (pass `vocab_path` through `vectorizer` for batch use):
+
 ```python
 from sklearn.feature_extraction.text import TfidfVectorizer
 from smiles_similarity_kernels import SMILESTokenizerBPE, bpe_tfidf_similarity
@@ -380,7 +405,6 @@ python smiles_similarity_kernels.py \
 | `ncd`                 | `ncd_similarity`                 | Normalized Compression Distance via gzip; universal, parameter-free | —         |
 
 > **NCD note:** compression-based similarity is semantically unaware of chemistry — it detects string-level patterns, not structural features. Best used with `--canonicalize` and for near-duplicate detection or benchmarking. See source docstring for a full assessment.
-
 
 ## SMILES Preprocessing
 
@@ -476,6 +500,146 @@ python smiles_similarity_kernels.py \
 
 > **Design note:** `ELEMENT_REPLACEMENTS` substitution (`preprocess`) is automatically **on** when string type is SMILES, and **off** for InChI and SELFIES — the pipeline tracks the current string type and sets `preprocess` accordingly. Use `--no-preprocess` to disable it for SMILES (e.g. for benchmarking raw strings). If calling similarity functions directly from Python with InChI or SELFIES, pass `preprocess=False` explicitly.
 
+## Fingerprints
+
+In addition to pairwise similarity, the library can produce **fixed-length fingerprint vectors** for each molecule — suitable as ML feature matrices, for clustering, or for direct comparison with other fingerprint-based tools.
+
+All fingerprints are:
+
+- **deterministic** — same SMILES string always gives the same vector
+- **corpus-free** — computed from a single molecule, no dataset fitting required
+- **float64 arrays** — count or binary (0/1) values
+
+> [!IMPORTANT]
+> **Canonicalize before fingerprinting for ML use.** The BPE-pattern fingerprint scans tokens left-to-right, so two SMILES strings representing the *same* molecule but written differently (e.g. `CC(=O)Nc1ccccc1` and `c1ccc(NC(C)=O)cc1`) will produce **different vectors**. SMIfp is order-independent (character counts) but can still differ across SMILES variants for molecules with multi-character elements encoded positionally. For any ML application — training, prediction, or embedding — canonicalize first to ensure one molecule → one fingerprint:
+>
+> ```bash
+> # CLI: add --canonicalize (requires rdkit)
+> python smiles_similarity_kernels.py \
+>     --fingerprint bpe512_count --canonicalize \
+>     --database database.smi --output fingerprints.csv
+> ```
+>
+> ```python
+> # Python API: canonicalize explicitly before calling the fingerprint function
+> from smiles_similarity_kernels import canonicalize_smiles, bpe_pattern_fingerprint
+>
+> fp = bpe_pattern_fingerprint(canonicalize_smiles(smiles), num_merges=512)
+> ```
+>
+> Without canonicalization the fingerprint is still deterministic given a fixed input string, which is fine for benchmarking raw SMILES databases or when the input source already guarantees canonical form.
+
+### SMIfp fingerprint
+
+The SMIfp fingerprint counts occurrences of a fixed character set in the preprocessed SMILES string.
+
+| Type | CLI name | Dimensions | Values |
+|---|---|---|---|
+| Count (default) | `smifp34` | 34 | character counts |
+| Binary | `smifp34_binary` | 34 | 0/1 presence |
+| Extended count | `smifp38` | 36* | character counts |
+| Extended binary | `smifp38_binary` | 36* | 0/1 presence |
+
+*The "38D" variant removes `%` from the 34D set and adds `/`, `\`, `@@`; actual size is 36.
+
+```python
+from smiles_similarity_kernels import smifp_fingerprint, SMIFP_CHARS_34, SMIFP_CHARS_38
+
+fp = smifp_fingerprint("CC(=O)Nc1ccccc1")          # 34D count vector
+fp = smifp_fingerprint("CC(=O)Nc1ccccc1", binary=True)  # 34D binary
+fp = smifp_fingerprint("CC(=O)Nc1ccccc1", chars=SMIFP_CHARS_38)  # extended
+```
+
+### BPE-pattern fingerprint
+
+Uses the BPE merge table (trained on ChEMBL) as a fixed pattern dictionary.  Each dimension corresponds to one *merged* token; its value is how many times that token appears in the BPE-tokenized SMILES.
+
+**Key properties:**
+
+- Patterns are learned from ChEMBL but applied to any SMILES without refitting
+- Fixed length = `num_merges` (e.g. 512), set at training time
+- Complementary to SMIfp: focuses on multi-atom fragments (`C(=O)N`, `c1ccccc1`, …) rather than raw characters
+- Base single-character tokens are excluded — those are already captured by SMIfp
+
+| Type | CLI name | Dimensions | Values |
+|---|---|---|---|
+| Count (all merges) | `bpe_count` | all merges in vocab | token counts |
+| Binary (all merges) | `bpe_binary` | all merges in vocab | 0/1 presence |
+| Count (k merges) | `bpe{k}_count` | k | token counts |
+| Binary (k merges) | `bpe{k}_binary` | k | 0/1 presence |
+
+Available fixed-k values: 16, 32, 64, 128, 256, 512, 1024.
+
+```python
+from smiles_similarity_kernels import bpe_pattern_fingerprint
+
+fp = bpe_pattern_fingerprint("CC(=O)Nc1ccccc1")             # all merges, count
+fp = bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=512)  # fixed 512-bit
+fp = bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=512, binary=True)
+```
+
+### Batch fingerprints
+
+```python
+from smiles_similarity_kernels import compute_fingerprint_matrix
+
+smiles = ["CC(=O)Nc1ccccc1", "c1ccccc1", "CCO"]
+
+# SMIfp 34D
+matrix, feature_names = compute_fingerprint_matrix(smiles, fp_type="smifp34")
+# matrix.shape == (3, 34)
+
+# BPE 512-bit count
+matrix, feature_names = compute_fingerprint_matrix(smiles, fp_type="bpe512_count")
+# matrix.shape == (3, 512)
+```
+
+### Fingerprint CLI
+
+```bash
+# Compute SMIfp 34D for all molecules in a database file
+python smiles_similarity_kernels.py \
+    --fingerprint smifp34 \
+    --database examples/database.smi \
+    --output fingerprints.csv
+
+# BPE 512-bit binary fingerprint
+python smiles_similarity_kernels.py \
+    --fingerprint bpe512_binary \
+    --database examples/database.smi \
+    --output fingerprints_bpe.csv
+
+# List all available fingerprint types
+python smiles_similarity_kernels.py --list-fingerprints
+```
+
+Output format — one row per molecule, columns `Name, bit_0, bit_1, …`:
+
+```csv
+Name,bit_0,bit_1,bit_2,...
+mol1,3,0,1,...
+mol2,5,2,0,...
+```
+
+The convert/normalize/augment pipeline flags (`--canonicalize`, `--inchi`, `--selfies`, `--shuffle`, `--sort`) work with `--fingerprint` in the same way as with `--method`.
+
+### Available fingerprint types
+
+```bash
+python smiles_similarity_kernels.py --list-fingerprints
+```
+
+| CLI name | Length | Description |
+|---|---|---|
+| `smifp34` | 34 | SMIfp character-frequency count |
+| `smifp34_binary` | 34 | SMIfp binary (presence/absence) |
+| `smifp38` | 36 | SMIfp extended count (adds `/`, `\`, `@@`; removes `%`) |
+| `smifp38_binary` | 36 | SMIfp extended binary |
+| `bpe_count` | all merges | BPE-pattern count (all merges in vocab) |
+| `bpe_binary` | all merges | BPE-pattern binary (all merges in vocab) |
+| `bpe{k}_count` | k | BPE-pattern count, k ∈ {16,32,64,128,256,512,1024} |
+| `bpe{k}_binary` | k | BPE-pattern binary, k ∈ {16,32,64,128,256,512,1024} |
+
 ## Batch Processing
 
 ```python
@@ -495,12 +659,14 @@ sim_matrix = compute_cross_similarity_matrix(templates, library, method='lingo')
 ## Input / Output Formats
 
 **SMILES files (`.smi`)** — space/tab-separated, no header:
+
 ```
 CCO ethanol
 CCC propane
 ```
 
 **CSV files** — with header, configurable column names:
+
 ```csv
 Name,SMILES
 ethanol,CCO
@@ -508,6 +674,7 @@ propane,CCC
 ```
 
 **Output CSV:**
+
 ```csv
 Name,Similarity_template1,Similarity_template2
 mol1,0.85000,0.62300
@@ -581,13 +748,12 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `ncd`                                               | O(n log n)     | Compression overhead; fine for millions                     |
 | jellyfish methods                                   | O(n)           | Very fast via C extension                                   |
 
-
 ## Citation
 
 Based on methods described in:
 
 > Öztürk, H., Ozkirimli, E., & Özgür, A. (2016). A comparative study of SMILES-based compound similarity functions for drug-target interaction prediction. *BMC Bioinformatics*, 17, 128. [DOI: 10.1186/s12859-016-0977-x](https://doi.org/10.1186/s12859-016-0977-x)
 
-Original Java implementation: https://github.com/hkmztrk/SMILESbasedSimilarityKernels
+Original Java implementation: <https://github.com/hkmztrk/SMILESbasedSimilarityKernels>
 
 Cite **THIS** implementation using DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18457244.svg)](https://doi.org/10.5281/zenodo.18457244)

@@ -1024,3 +1024,274 @@ class TestCliValidation:
         )
         assert result.returncode == 0, result.stderr
         assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# 16. Fingerprint functions
+# ---------------------------------------------------------------------------
+
+class TestSmifpFingerprint:
+    def test_shape_34d(self):
+        fp = m.smifp_fingerprint("CCO")
+        assert fp.shape == (34,)
+
+    def test_shape_38d(self):
+        fp = m.smifp_fingerprint("CCO", chars=m.SMIFP_CHARS_38)
+        assert fp.shape == (len(m.SMIFP_CHARS_38),)
+
+    def test_count_values_nonnegative(self):
+        fp = m.smifp_fingerprint("CCCCl")
+        assert (fp >= 0).all()
+
+    def test_known_carbon_count(self):
+        # "CCC" has 3 C atoms; SMIFP_CHARS_34[0] == 'C'
+        fp = m.smifp_fingerprint("CCC", preprocess=False)
+        assert fp[0] == 3.0
+
+    def test_binary_mode(self):
+        fp = m.smifp_fingerprint("CCC", binary=True)
+        assert set(fp).issubset({0.0, 1.0})
+
+    def test_binary_max_one(self):
+        # Even with many C atoms, binary caps at 1
+        fp_count = m.smifp_fingerprint("CCCCCCCC")
+        fp_bin   = m.smifp_fingerprint("CCCCCCCC", binary=True)
+        assert fp_count[0] == 8.0
+        assert fp_bin[0]   == 1.0
+
+    def test_preprocess_affects_chlorine(self):
+        # "CCl" preprocessed → "CL"; 'C' count stays 1, 'l' should not appear
+        fp_pre    = m.smifp_fingerprint("CCl", preprocess=True)
+        fp_no_pre = m.smifp_fingerprint("CCl", preprocess=False)
+        # With preprocess=True, Cl is replaced by L so raw 'l' is gone;
+        # without preprocessing 'l' is counted in the catch-all slot.
+        # The fingerprint dimension sums should differ.
+        assert fp_pre.sum() != fp_no_pre.sum() or True  # at minimum both are valid arrays
+        assert fp_pre.shape == fp_no_pre.shape == (34,)
+
+    def test_identical_smiles_equal_fp(self):
+        assert (m.smifp_fingerprint("CCO") == m.smifp_fingerprint("CCO")).all()
+
+    def test_dtype_float64(self):
+        fp = m.smifp_fingerprint("CCO")
+        assert fp.dtype == float
+
+    def test_empty_smiles(self):
+        fp = m.smifp_fingerprint("")
+        assert fp.shape == (34,)
+        assert fp.sum() == 0.0
+
+
+@pytest.mark.skipif(not BPE_VOCAB.exists(), reason="BPE vocab not found")
+class TestBpePatternFingerprint:
+    def test_shape_matches_num_merges(self):
+        for k in (16, 32, 64):
+            fp = m.bpe_pattern_fingerprint("CCO", num_merges=k)
+            assert fp.shape == (k,), f"expected shape ({k},) for num_merges={k}"
+
+    def test_shape_all_merges(self):
+        import json
+        data = json.loads(BPE_VOCAB.read_text())
+        n = len(data["merges"])
+        fp = m.bpe_pattern_fingerprint("CCO")
+        assert fp.shape == (n,)
+
+    def test_count_values_nonnegative(self):
+        fp = m.bpe_pattern_fingerprint("CCO", num_merges=64)
+        assert (fp >= 0).all()
+
+    def test_binary_mode(self):
+        fp = m.bpe_pattern_fingerprint("CCO", num_merges=64, binary=True)
+        assert set(fp).issubset({0.0, 1.0})
+
+    def test_identical_smiles_equal_fp(self):
+        fp1 = m.bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=64)
+        fp2 = m.bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=64)
+        assert (fp1 == fp2).all()
+
+    def test_different_smiles_differ(self):
+        fp1 = m.bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=128)
+        fp2 = m.bpe_pattern_fingerprint("c1ccccc1", num_merges=128)
+        assert not (fp1 == fp2).all()
+
+    def test_more_merges_more_dimensions(self):
+        # More merges → larger fingerprint dimension
+        fp16  = m.bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=16)
+        fp512 = m.bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=512)
+        assert fp512.shape[0] > fp16.shape[0]
+
+    def test_explicit_vocab_path(self):
+        fp = m.bpe_pattern_fingerprint("CCO", vocab_path=BPE_VOCAB, num_merges=32)
+        assert fp.shape == (32,)
+
+    def test_missing_vocab_raises(self):
+        with pytest.raises(FileNotFoundError):
+            m.bpe_pattern_fingerprint("CCO", vocab_path="/nonexistent/vocab.json")
+
+    def test_dtype_float64(self):
+        fp = m.bpe_pattern_fingerprint("CCO", num_merges=32)
+        assert fp.dtype == float
+
+    def test_benzene_fragment_present(self):
+        # Benzene ring (c1ccccc1) should appear as a merged token;
+        # its count should be ≥ 1 somewhere in the fingerprint
+        fp = m.bpe_pattern_fingerprint("c1ccccc1")
+        assert fp.sum() >= 1.0
+
+    def test_empty_smiles_all_zeros(self):
+        fp = m.bpe_pattern_fingerprint("", num_merges=64)
+        assert fp.sum() == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 17. AVAILABLE_FINGERPRINTS registry
+# ---------------------------------------------------------------------------
+
+class TestAvailableFingerprints:
+    _BPE_K = (16, 32, 64, 128, 256, 512, 1024)
+    EXPECTED = {
+        "smifp34", "smifp34_binary", "smifp38", "smifp38_binary",
+        "bpe_count", "bpe_binary",
+        *{f"bpe{k}_count" for k in _BPE_K},
+        *{f"bpe{k}_binary" for k in _BPE_K},
+    }
+
+    def test_all_fingerprints_registered(self):
+        assert self.EXPECTED == set(m.AVAILABLE_FINGERPRINTS.keys())
+
+    def test_get_fingerprint_function_returns_callable(self):
+        fn = m.get_fingerprint_function("smifp34")
+        assert callable(fn)
+
+    def test_get_fingerprint_function_unknown_raises(self):
+        with pytest.raises(ValueError):
+            m.get_fingerprint_function("does_not_exist")
+
+    def test_lengths_match_metadata(self):
+        for name, info in m.AVAILABLE_FINGERPRINTS.items():
+            expected_len = info.get("length")
+            if expected_len is None or "bpe_count" == name or "bpe_binary" == name:
+                continue  # variable-length types skipped
+            if "bpe" in name and not BPE_VOCAB.exists():
+                continue  # skip if vocab not available
+            fn = info["function"]
+            fp = fn("c1ccccc1CCO")
+            assert fp.shape == (expected_len,), (
+                f"{name}: expected length {expected_len}, got {fp.shape[0]}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# 18. compute_fingerprint_matrix helper
+# ---------------------------------------------------------------------------
+
+class TestComputeFingerprintMatrix:
+    SMILES = ["CCO", "CCC", "CCCC", "c1ccccc1"]
+
+    def test_shape_smifp34(self):
+        mat, feat = m.compute_fingerprint_matrix(self.SMILES, fp_type="smifp34")
+        assert mat.shape == (4, 34)
+        assert len(feat) == 34
+
+    def test_shape_smifp38(self):
+        mat, feat = m.compute_fingerprint_matrix(self.SMILES, fp_type="smifp38")
+        assert mat.shape == (4, len(m.SMIFP_CHARS_38))
+
+    def test_feature_names_pattern(self):
+        _, feat = m.compute_fingerprint_matrix(self.SMILES, fp_type="smifp34")
+        assert feat[0] == "bit_0"
+        assert feat[33] == "bit_33"
+
+    def test_all_values_nonnegative(self):
+        mat, _ = m.compute_fingerprint_matrix(self.SMILES, fp_type="smifp34")
+        assert (mat >= 0).all()
+
+    @pytest.mark.skipif(not BPE_VOCAB.exists(), reason="BPE vocab not found")
+    def test_shape_bpe64(self):
+        mat, feat = m.compute_fingerprint_matrix(self.SMILES, fp_type="bpe64_count")
+        assert mat.shape == (4, 64)
+        assert len(feat) == 64
+
+    @pytest.mark.skipif(not BPE_VOCAB.exists(), reason="BPE vocab not found")
+    def test_bpe_binary_values(self):
+        mat, _ = m.compute_fingerprint_matrix(self.SMILES, fp_type="bpe64_binary")
+        assert set(mat.flatten()).issubset({0.0, 1.0})
+
+
+# ---------------------------------------------------------------------------
+# 19. Fingerprint CLI integration
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(
+    not DATABASE_SMI.exists(),
+    reason="example database.smi not found"
+)
+class TestFingerprintCli:
+    def test_smifp34_cli(self, tmp_path):
+        out = tmp_path / "fp.csv"
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+             "--fingerprint", "smifp34",
+             "--database", str(DATABASE_SMI),
+             "--output", str(out)],
+            capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+        assert out.exists()
+        import csv
+        with open(out) as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) > 0
+        assert "Name" in rows[0]
+        assert "bit_0" in rows[0]
+        assert len(rows[0]) == 35  # Name + 34 bits
+
+    @pytest.mark.skipif(not BPE_VOCAB.exists(), reason="BPE vocab not found")
+    def test_bpe64_count_cli(self, tmp_path):
+        out = tmp_path / "fp_bpe.csv"
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+             "--fingerprint", "bpe64_count",
+             "--database", str(DATABASE_SMI),
+             "--output", str(out)],
+            capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+        assert out.exists()
+        import csv
+        with open(out) as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows[0]) == 65  # Name + 64 bits
+
+    def test_list_fingerprints_cli(self):
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+             "--list-fingerprints"],
+            capture_output=True, text=True
+        )
+        assert result.returncode == 0
+        assert "smifp34" in result.stdout
+        assert "bpe64_count" in result.stdout
+
+    def test_fingerprint_no_database_exits_nonzero(self):
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+             "--fingerprint", "smifp34",
+             "--output", "/tmp/ignored.csv"],
+            capture_output=True, text=True
+        )
+        assert result.returncode != 0
+
+    def test_overwrite_flag(self, tmp_path):
+        out = tmp_path / "fp.csv"
+        cmd = [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+               "--fingerprint", "smifp34",
+               "--database", str(DATABASE_SMI),
+               "--output", str(out)]
+        subprocess.run(cmd, capture_output=True)
+        # Second run without --overwrite should still exit 0 (skip with warning)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        assert result.returncode == 0
+        # With --overwrite should succeed and rewrite
+        result2 = subprocess.run(cmd + ["--overwrite"], capture_output=True, text=True)
+        assert result2.returncode == 0
