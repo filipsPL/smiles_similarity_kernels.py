@@ -36,7 +36,9 @@ import sys
 import json
 import time
 import random
+import warnings
 import argparse
+import functools
 import numpy as np
 import pandas as pd
 from collections import Counter
@@ -853,6 +855,9 @@ def clcs_similarity(smiles1: str, smiles2: str, w1: float = 0.33, w2: float = 0.
     float
         Similarity score
     """
+    if abs(w1 + w2 + w3 - 1.0) > 1e-9:
+        warnings.warn(f"clcs_similarity: weights w1={w1}, w2={w2}, w3={w3} sum to {w1+w2+w3:.6g}, not 1. Scores will be off-scale.", stacklevel=2)
+
     if preprocess:
         smiles1 = preprocess_smiles(smiles1)
         smiles2 = preprocess_smiles(smiles2)
@@ -1404,6 +1409,7 @@ def spectrum_kernel_similarity(
 # ============================================================================
 
 
+@functools.lru_cache(maxsize=4096)
 def _generate_mismatches(kmer: str, m: int, alphabet: str) -> List[str]:
     """
     Generate all strings at Hamming distance <= m from ``kmer``.
