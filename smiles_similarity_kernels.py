@@ -3534,6 +3534,14 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
     )
 
     parser.add_argument(
+        "--methods",
+        nargs="+",
+        choices=list(AVAILABLE_METHODS.keys()),
+        metavar="METHOD",
+        help="Run a specific subset of methods (same output naming as --all-methods). Useful when some methods are invalid for the current representation.",
+    )
+
+    parser.add_argument(
         "--all-methods",
         action="store_true",
         help="Calculate similarities using all available methods. Output files will be named METHOD_output.csv",
@@ -3952,11 +3960,16 @@ def main():
 
     if args.all_methods:
         methods_to_run = list(AVAILABLE_METHODS.keys())
+        multi_output = True
+    elif args.methods:
+        methods_to_run = args.methods
+        multi_output = True
     else:
         methods_to_run = [args.method]
+        multi_output = False
 
     for method in methods_to_run:
-        if args.all_methods:
+        if multi_output:
             output_path = Path(args.output)
             # stem is e.g. "smiles__replaced" or "inchi_all__" (trailing __ when no mods)
             # final name: "{repr}__{mods}__{method}.csv"
@@ -3966,7 +3979,7 @@ def main():
             method_output = args.output
 
         if args.verbose:
-            if args.all_methods:
+            if multi_output:
                 print(f"\nProcessing method: {method}")
             print("Calculating similarities...")
             total_comparisons = len(library_strings) * len(template_strings)
@@ -3988,7 +4001,7 @@ def main():
             sim_matrix = compute_cross_similarity_matrix(template_strings, library_strings, method=method, **extra_kwargs)
             _elapsed = time.perf_counter() - _t0
         except ImportError as exc:
-            if args.all_methods:
+            if multi_output:
                 print(f"  [skip] {method}: {exc}", file=sys.stderr)
                 if args.timing_log:
                     with open(args.timing_log, "a") as _f:
@@ -4008,7 +4021,7 @@ def main():
                 _f.write(f"{method},ok,{_elapsed:.6f}\n")
 
     if args.verbose:
-        if args.all_methods:
+        if multi_output:
             print(f"\nCompleted! Generated {len(methods_to_run)} output files.")
         print("Done!")
 

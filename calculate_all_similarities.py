@@ -58,6 +58,28 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# Method exclusion rules
+#
+# Each prefix listed here will exclude any method whose name starts with it.
+# Add new prefixes here when adding representations or method families.
+#
+# Rationale:
+#   tok-smiles / tok-schwaller / tok-bpe  — tokenize on SMILES-specific tokens
+#       (Cl, Br, @@, ring digits…); meaningless on InChI or SELFIES strings
+#   tok-selfies   — splits on [...] SELFIES brackets; meaningless on SMILES/InChI
+#   smifp         — counts SMILES-alphabet characters after ELEMENT_REPLACEMENTS;
+#       SELFIES uses a different bracket alphabet, so counts are not comparable
+#   lingo*        — applies ring-number normalization (SMILES-specific step);
+#       semantically wrong on SELFIES
+# ---------------------------------------------------------------------------
+
+# methods invalid for InChI representations
+_INCHI_EXCLUDED = frozenset(["tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe", "tok-selfies_tfidf"])
+
+# methods invalid for SELFIES representation
+_SELFIES_EXCLUDED = frozenset(["tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe", "smifp", "lingo"])
+
 
 # ---------------------------------------------------------------------------
 # Variant definitions
@@ -141,6 +163,7 @@ VARIANTS = [
         "requires": ["rdkit"],
         "description": "full InChI (all layers)",
         "stage": "convert",
+        "excluded_method_prefixes": _INCHI_EXCLUDED,
     },
     *[
         {
@@ -150,6 +173,7 @@ VARIANTS = [
             "requires": ["rdkit"],
             "description": f"InChI {layer} layer",
             "stage": "convert",
+            "excluded_method_prefixes": _INCHI_EXCLUDED,
         }
         for layer in INCHI_LAYERS
     ],
@@ -162,6 +186,7 @@ VARIANTS = [
         "requires": ["selfies"],
         "description": "SELFIES",
         "stage": "convert",
+        "excluded_method_prefixes": _SELFIES_EXCLUDED,
     },
 ]
 
@@ -175,6 +200,30 @@ def check_available(requires: list[str]) -> list[str]:
         except ImportError:
             missing.append(pkg)
     return missing
+
+
+def get_valid_methods(variant: dict) -> list[str] | None:
+    """
+    Return the list of method names valid for this variant, or None if all methods
+    are allowed (i.e. no exclusions — caller should use --all-methods).
+
+    Methods are excluded when their name starts with any prefix in the variant's
+    'excluded_method_prefixes' set. To add a new exclusion, either extend one of
+    the _INCHI_EXCLUDED / _SELFIES_EXCLUDED sets above, or add a new
+    'excluded_method_prefixes' key to a variant entry.
+    """
+    excluded_prefixes = variant.get("excluded_method_prefixes", frozenset())
+    if not excluded_prefixes:
+        return None  # no filtering needed
+
+    import smiles_similarity_kernels as _ssk  # lazy import — only when filtering
+
+    valid = [
+        name
+        for name in _ssk.AVAILABLE_METHODS
+        if not any(name.startswith(pfx) for pfx in excluded_prefixes)
+    ]
+    return valid
 
 
 def run_variant(
@@ -202,6 +251,12 @@ def run_variant(
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tf:
         timing_log = Path(tf.name)
 
+    valid_methods = get_valid_methods(variant)
+    if valid_methods is None:
+        method_args = ["--all-methods"]
+    else:
+        method_args = ["--methods", *valid_methods]
+
     cmd = [
         sys.executable,
         str(Path(__file__).parent / "smiles_similarity_kernels.py"),
@@ -211,7 +266,7 @@ def run_variant(
         str(database),
         "--output",
         str(output_file),
-        "--all-methods",
+        *method_args,
         "--timing-log",
         str(timing_log),
         *variant["extra_args"],
@@ -323,6 +378,8 @@ def main() -> None:
         print(f"  → [{stem}] {variant['description']}")
         ok, reason, elapsed, method_rows = run_variant(templates, database, output_dir, variant, args.verbose, args.dry_run, args.overwrite)
         if args.dry_run:
+            valid_methods = get_valid_methods(variant)
+            method_args = ["--all-methods"] if valid_methods is None else ["--methods", *valid_methods]
             cmd = [
                 sys.executable,
                 str(Path(__file__).parent / "smiles_similarity_kernels.py"),
@@ -332,7 +389,7 @@ def main() -> None:
                 str(database),
                 "--output",
                 str(output_dir / f"{stem}.csv"),
-                "--all-methods",
+                *method_args,
                 *variant["extra_args"],
             ]
             print(f"     {' '.join(cmd)}")
