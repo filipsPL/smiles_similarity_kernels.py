@@ -3062,7 +3062,10 @@ def write_fingerprint_csv(
     for i, fname in enumerate(feature_names):
         cols[fname] = matrix[:, i]
     df = pd.DataFrame(cols)
-    df.to_csv(output_path, index=False, float_format="%.0f")
+    # Use integer format for count/binary fingerprints; float for normalized ones.
+    is_integer = matrix.size > 0 and np.all(matrix == np.floor(matrix))
+    fmt = "%.0f" if is_integer else "%.6f"
+    df.to_csv(output_path, index=False, float_format=fmt)
 
 
 # ============================================================================
