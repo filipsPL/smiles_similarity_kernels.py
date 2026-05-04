@@ -28,6 +28,61 @@ Usage from command line:
 Author: fstefaniak@iimcb.gov.pl, https://github.com/filipsPL/smiles_similarity_kernels.py
 
 Cite all versions by using the DOI 10.5281/zenodo.18457244
+
+---
+
+PhaSMIfp — Pharmacophoric SMILES Fingerprint
+=============================================
+
+PhaSMIfp is a 78-dimensional pharmacophoric fingerprint derived entirely from
+the SMILES string.  It is corpus-free and deterministic: no training data or
+fitting step is needed.
+
+Pharmacophoric alphabet (12 classes, fixed order):
+
+  Symbol  Class                 Detection rule
+  ------  -------------------   --------------------------------------------------
+  D       H-bond donor          bare N, O (implicit H by valence); bracket atoms
+                                with explicit H: [NH2], [OH], [nH], [NH2+], etc.
+  A       H-bond acceptor       bare N, O, n, o, F; bracket [N]/[O]/[F] w/o '+'
+  R       Aromatic atom         bare c, n, o, s, p tokens
+  T       Sp3 carbon            bare C token (Cl handled as one token by tokenizer)
+  L       Lipophilic run        count of contiguous C/c token runs (not atom count)
+  P       Positive ionizable    bracket N/n with explicit '+': [NH2+], [nH+], [N+]
+  M       Negative ionizable    bracket O/N/S with explicit '-': [O-], [NH-], [S-]
+  Q       Quaternary N+         bracket [N+] without any H: permanently charged N
+  E       Carbonyl              '=O' bond where the other atom is C/c (C=O or O=C)
+  X       Halogen               bare F, Cl, Br, I tokens
+  S       Sulfur (any)          bare S, s, or bracket atom starting with S/s
+  G       Ring closure          count of ring-closure tokens (digits 1-9, %NN)
+
+Detection uses the Schwaller tokenizer so multi-character atoms (Cl, Br, [nH])
+are indivisible units.  Canonicalization via RDKit is applied before detection
+when RDKit is available (strongly recommended for consistent results).
+
+78D vector layout:
+  [0:12]   12D — per-class integer counts (one dimension per class above)
+  [12:78]  66D — pairwise min co-occurrence: min(count_i, count_j)
+                 for all C(12,2) = 66 unique pairs i < j
+
+Three output modes (``output`` parameter / registry key suffix):
+  'count'      — raw integer counts (default); use for distance-based methods
+  'binary'     — presence/absence (0/1); use for Tanimoto similarity
+  'normalized' — divide by sum of 12D counts; use for angle-based comparison
+
+PhaSMIfp is order-agnostic by design: all features are derived from token
+counts and pairwise co-occurrence, not from token sequence position.  This
+means two valid SMILES for the same molecule — when canonicalized — produce
+identical vectors, even if the atom ordering differs.
+
+Usage example:
+    from smiles_similarity_kernels import pharmacophoric_fingerprint
+    fp = pharmacophoric_fingerprint("CC(=O)Nc1ccc(O)cc1")       # 78D count
+    fp_bin = pharmacophoric_fingerprint("CCO", output='binary')  # 78D binary
+
+CLI usage:
+    python smiles_similarity_kernels.py --fingerprint phasmifp \\
+        --canonicalize --database molecules.smi --output fp.csv
 """
 
 import re
@@ -2590,6 +2645,254 @@ def bpe_pattern_fingerprint(
     return fp
 
 
+# ============================================================================
+# PhaSMIfp — Pharmacophoric SMILES Fingerprint
+# ============================================================================
+
+# Fixed ordered alphabet — indices must never change (they determine feature positions).
+PHASMIFP_CLASSES = ['D', 'A', 'R', 'T', 'L', 'P', 'M', 'Q', 'E', 'X', 'S', 'G']
+
+# Reuse the Schwaller tokenizer regex for token-level detection.
+_PHARM_TOKEN_RE = SMILESTokenizerSchwaller._TOKEN_RE
+
+
+def _is_carbon_token(tok: str) -> bool:
+    """Return True if *tok* represents a carbon atom (bare C/c or bracket [C...]/ [c...])."""
+    if tok in ('C', 'c'):
+        return True
+    if tok.startswith('[') and tok[1:2] in ('C', 'c'):
+        return True
+    return False
+
+
+def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
+    """
+    Return the 12D pharmacophoric class count vector for *smiles*.
+
+    Detection is performed on Schwaller tokens so that multi-character atoms
+    (Cl, Br, [nH], %10) are treated as single indivisible units, eliminating
+    substring matching artefacts.
+
+    Classes (in PHASMIFP_CLASSES order):
+      D  H-bond donor       — bare N/O (implicit H by valence) + bracket N/O/n/o
+                              with explicit H ([NH2], [OH], [nH], [NH2+], etc.)
+      A  H-bond acceptor    — bare N, O, n, o, F; bracket [N]/[O]/[F] without '+'
+      R  Aromatic atom      — bare c, n, o, s, p tokens
+      T  Sp3 carbon         — bare C token (tokenizer gives Cl/C as separate tokens)
+      L  Lipophilic run     — count of contiguous C/c runs in token stream
+      P  Positive ionizable — bracket atoms with N/n and explicit '+'
+      M  Negative ionizable — bracket atoms with O/N/S and explicit '-'
+      Q  Quaternary N+      — bracket [N+] without any H
+      E  Carbonyl           — '=O' where the bonded atom is C/c (scan back past branches)
+      X  Halogen            — bare F, Cl, Br, I tokens
+      S  Sulfur (any)       — bare S, s, or bracket atom starting with S
+      G  Ring closure       — single-digit (1-9) and %NN ring closure tokens
+    """
+    if not smiles:
+        return np.zeros(12, dtype=float)
+
+    try:
+        tokens = _PHARM_TOKEN_RE.findall(smiles)
+    except Exception:
+        return np.zeros(12, dtype=float)
+
+    counts = np.zeros(12, dtype=float)
+    n_tokens = len(tokens)
+    in_lipophilic_run = False
+
+    for i, tok in enumerate(tokens):
+        is_bracket = tok.startswith('[')
+
+        # D — H-bond donor:
+        #   • bare N or O — implicit H by SMILES valence rules (N has 3 bonds, O has 2)
+        #   • bracket atoms with explicit H: [NH2], [OH], [nH], [NH2+], [NH-], etc.
+        if tok in ('N', 'O'):
+            counts[0] += 1  # D (bare, has implicit H unless charge/over-valenced)
+        elif is_bracket:
+            inner = tok[1:-1]
+            if inner and inner[0] in ('N', 'O', 'n', 'o') and 'H' in inner:
+                counts[0] += 1  # D (explicit H in bracket)
+
+        # A — H-bond acceptor: bare N, O, n, o, F; bracket [N]/[O]/[F] without '+'
+        if tok in ('N', 'O', 'n', 'o', 'F'):
+            counts[1] += 1  # A
+        elif is_bracket:
+            inner = tok[1:-1]
+            if inner and inner[0] in ('N', 'O', 'F', 'n', 'o', 'f') and '+' not in inner:
+                counts[1] += 1  # A
+
+        # R — aromatic bare atom
+        if tok in ('c', 'n', 'o', 's', 'p'):
+            counts[2] += 1  # R
+
+        # T — sp3 carbon: bare 'C' (tokenizer gives Cl as one token, so bare C is safe)
+        if tok == 'C':
+            counts[3] += 1  # T
+
+        # L — lipophilic run: count transitions into a C/c run
+        is_carbon = tok in ('C', 'c')
+        if is_carbon and not in_lipophilic_run:
+            counts[4] += 1  # L — new run starts
+            in_lipophilic_run = True
+        elif not is_carbon:
+            in_lipophilic_run = False
+
+        # P — positive ionizable: bracket N/n with explicit '+'
+        if is_bracket:
+            inner = tok[1:-1]
+            if inner and inner[0] in ('N', 'n') and '+' in inner:
+                counts[5] += 1  # P
+
+        # M — negative ionizable: bracket O/N/S/s with explicit '-'
+        if is_bracket:
+            inner = tok[1:-1]
+            if inner and inner[0] in ('O', 'N', 'S', 'o', 'n', 's') and '-' in inner:
+                counts[6] += 1  # M
+
+        # Q — quaternary N+: bracket [N+] without any H
+        if is_bracket:
+            inner = tok[1:-1]
+            if inner.startswith('N+') and 'H' not in inner:
+                counts[7] += 1  # Q
+
+        # E — carbonyl: any '=O' bond where the other atom is C/c.
+        # Detect at the '=' token to handle all orderings:
+        #   C=O  (C before =)  and  O=C  (O before =, aldehyde/ketone head form)
+        # Look both one step back and one step forward from '='.
+        # To avoid double-counting a single =O group, only count at '='.
+        if tok == '=' and i + 1 < n_tokens and i > 0:
+            next_tok = tokens[i + 1]
+            prev_tok_raw = tokens[i - 1]
+
+            # resolve branch-open: if '=' is right after '(' the parent atom is further back
+            if prev_tok_raw == '(':
+                # find atom before '(' skipping any closed branches
+                j = i - 2
+                while j >= 0 and tokens[j] == ')':
+                    depth = 0
+                    while j >= 0:
+                        if tokens[j] == ')':
+                            depth += 1
+                        elif tokens[j] == '(':
+                            depth -= 1
+                            if depth == 0:
+                                j -= 1
+                                break
+                        j -= 1
+                prev_atom = tokens[j] if j >= 0 else ''
+            else:
+                # skip past any closed branches before '='
+                j = i - 1
+                while j >= 0 and tokens[j] == ')':
+                    depth = 0
+                    while j >= 0:
+                        if tokens[j] == ')':
+                            depth += 1
+                        elif tokens[j] == '(':
+                            depth -= 1
+                            if depth == 0:
+                                j -= 1
+                                break
+                        j -= 1
+                prev_atom = tokens[j] if j >= 0 else ''
+
+            # pattern 1: C=O  (carbon before '=', oxygen after)
+            if next_tok == 'O' and _is_carbon_token(prev_atom):
+                counts[8] += 1  # E
+            # pattern 2: O=C  (oxygen before '=', carbon after)
+            elif prev_atom == 'O' and _is_carbon_token(next_tok):
+                counts[8] += 1  # E
+
+        # X — halogen: bare F, Cl, Br, I (tokenizer gives Cl/Br as single tokens)
+        if tok in ('F', 'Cl', 'Br', 'I'):
+            counts[9] += 1  # X
+
+        # S — sulfur: bare S/s, or bracket atom starting with S
+        if tok in ('S', 's'):
+            counts[10] += 1  # S
+        elif is_bracket and tok[1:2] in ('S', 's'):
+            counts[10] += 1  # S
+
+        # G — ring closure: single digit 1-9, or %NN token
+        if (len(tok) == 1 and tok.isdigit() and tok != '0') or tok.startswith('%'):
+            counts[11] += 1  # G
+
+    return counts
+
+
+def get_pharmacophoric_feature_names() -> List[str]:
+    """
+    Return the 78 human-readable feature names for PhaSMIfp.
+
+    Layout:
+      [0:12]  pharm_D … pharm_G   — per-class counts
+      [12:78] pharm_DA, pharm_DR, … pharm_SG — pairwise min co-occurrence
+    """
+    names = [f"pharm_{c}" for c in PHASMIFP_CLASSES]
+    for i in range(12):
+        for j in range(i + 1, 12):
+            names.append(f"pharm_{PHASMIFP_CLASSES[i]}{PHASMIFP_CLASSES[j]}")
+    return names
+
+
+def pharmacophoric_fingerprint(
+    smiles: str,
+    output: str = 'count',
+) -> np.ndarray:
+    """
+    PhaSMIfp: 78D pharmacophoric SMILES fingerprint.
+
+    Computes a 12D pharmacophoric class count vector and a 66D pairwise
+    co-occurrence vector, concatenated into a single 78D hologram.
+
+    Layers:
+        [0:12]   12D — per-class counts (D, A, R, T, L, P, M, Q, E, X, S, G)
+        [12:78]  66D — pairwise min co-occurrence: min(count_i, count_j)
+                       for all unique pairs i < j (upper triangle, no diagonal)
+
+    Parameters
+    ----------
+    smiles : str
+        Input SMILES string.
+    output : str
+        'count'      — raw integer counts (default)
+        'binary'     — presence/absence (clip counts to 0/1)
+        'normalized' — divide by sum of 12D count vector (float, sums to 1
+                       for the first 12 dimensions; pairwise scaled accordingly)
+
+    Returns
+    -------
+    np.ndarray
+        1-D float64 array of length 78.
+    """
+    if not smiles:
+        return np.zeros(78, dtype=float)
+
+    smi = canonicalize_smiles(smiles) if RDKIT_AVAILABLE else smiles
+    if not smi:
+        smi = smiles
+
+    try:
+        counts = _compute_pharmacophore_counts(smi)
+    except Exception:
+        return np.zeros(78, dtype=float)
+
+    pairs = np.array(
+        [min(counts[i], counts[j]) for i in range(12) for j in range(i + 1, 12)],
+        dtype=float,
+    )
+
+    fp_78 = np.concatenate([counts, pairs]).astype(float)
+
+    if output == 'binary':
+        return (fp_78 > 0).astype(float)
+    elif output == 'normalized':
+        total = counts.sum()
+        return fp_78 / total if total > 0 else fp_78
+    else:
+        return fp_78
+
+
 # ---------------------------------------------------------------------------
 # Fingerprint registry
 # ---------------------------------------------------------------------------
@@ -2658,6 +2961,41 @@ AVAILABLE_FINGERPRINTS: Dict[str, dict] = {
             "params": {"num_merges": k},
         }
         for k in (16, 32, 64, 128, 256, 512, 1024)
+    },
+    # ── PhaSMIfp ─────────────────────────────────────────────────────────────
+    "phasmifp": {
+        "function": pharmacophoric_fingerprint,
+        "description": "PhaSMIfp 78D pharmacophoric hologram (12D counts + 66D pairwise co-occurrence, count)",
+        "length": 78,
+        "params": {"output": "count"},
+    },
+    "phasmifp_binary": {
+        "function": lambda smi, **kw: pharmacophoric_fingerprint(smi, output='binary', **kw),
+        "description": "PhaSMIfp 78D pharmacophoric hologram (binary presence/absence)",
+        "length": 78,
+        "params": {"output": "binary"},
+    },
+    "phasmifp_normalized": {
+        "function": lambda smi, **kw: pharmacophoric_fingerprint(smi, output='normalized', **kw),
+        "description": "PhaSMIfp 78D pharmacophoric hologram (normalized float)",
+        "length": 78,
+        "params": {"output": "normalized"},
+    },
+    "phasmifp12": {
+        "function": lambda smi, **kw: _compute_pharmacophore_counts(
+            (canonicalize_smiles(smi) if RDKIT_AVAILABLE else smi) or smi
+        ),
+        "description": "PhaSMIfp 12D pharmacophoric class count vector only (no pairwise layer)",
+        "length": 12,
+        "params": {},
+    },
+    "phasmifp12_binary": {
+        "function": lambda smi, **kw: (_compute_pharmacophore_counts(
+            (canonicalize_smiles(smi) if RDKIT_AVAILABLE else smi) or smi
+        ) > 0).astype(float),
+        "description": "PhaSMIfp 12D pharmacophoric class binary vector only (no pairwise layer)",
+        "length": 12,
+        "params": {},
     },
 }
 

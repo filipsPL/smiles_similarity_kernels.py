@@ -21,7 +21,8 @@ Output file naming:
 
   fingerprint:     smifp34 | smifp34_binary | smifp38 | smifp38_binary |
                    bpe_count | bpe_binary |
-                   bpe16_count | bpe16_binary | ... | bpe1024_count | bpe1024_binary
+                   bpe16_count | bpe16_binary | ... | bpe1024_count | bpe1024_binary |
+                   phasmifp | phasmifp_binary | phasmifp_normalized | phasmifp12 | phasmifp12_binary
 
 Examples:
     smiles__canonical+replaced__smifp34.csv
@@ -134,6 +135,11 @@ SMILES_FINGERPRINTS = [
     "bpe512_binary",
     "bpe1024_count",
     "bpe1024_binary",
+    "phasmifp",
+    "phasmifp_binary",
+    "phasmifp_normalized",
+    "phasmifp12",
+    "phasmifp12_binary",
 ]
 
 SELFIES_FINGERPRINTS = [

@@ -1154,6 +1154,8 @@ class TestAvailableFingerprints:
         "bpe_count", "bpe_binary",
         *{f"bpe{k}_count" for k in _BPE_K},
         *{f"bpe{k}_binary" for k in _BPE_K},
+        "phasmifp", "phasmifp_binary", "phasmifp_normalized",
+        "phasmifp12", "phasmifp12_binary",
     }
 
     def test_all_fingerprints_registered(self):
@@ -1295,3 +1297,84 @@ class TestFingerprintCli:
         # With --overwrite should succeed and rewrite
         result2 = subprocess.run(cmd + ["--overwrite"], capture_output=True, text=True)
         assert result2.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# 20. PhaSMIfp unit tests
+# ---------------------------------------------------------------------------
+
+def test_pharmacophoric_fingerprint():
+    """Standalone test for pharmacophoric_fingerprint and helpers."""
+
+    # 1. Dimensionality
+    fp78 = m.pharmacophoric_fingerprint("CCO")
+    assert fp78.shape == (78,), f"Expected 78D, got {fp78.shape}"
+
+    fp12 = m.get_fingerprint_function("phasmifp12")("CCO")
+    assert fp12.shape == (12,), f"Expected 12D, got {fp12.shape}"
+
+    # 2. Binary mode: all values 0.0 or 1.0
+    fp_bin = m.pharmacophoric_fingerprint("CCO", output='binary')
+    assert fp_bin.shape == (78,)
+    assert set(fp_bin.tolist()).issubset({0.0, 1.0}), "Binary mode has non-0/1 values"
+
+    # 3. Normalized mode: first 12 dims sum to ≤ 1.0 (or exactly 0 for zero vector)
+    fp_norm = m.pharmacophoric_fingerprint("CCO", output='normalized')
+    assert fp_norm.shape == (78,)
+    s = fp_norm[:12].sum()
+    assert s <= 1.0 + 1e-9, f"Normalized first-12 sum > 1: {s}"
+
+    # 4. Known molecule checks
+    # Acetamide: E > 0 (carbonyl), A > 0 (N and O acceptors), D > 0 (N/O donors)
+    ac = m._compute_pharmacophore_counts(m.canonicalize_smiles("CC(=O)N"))
+    assert ac[8] > 0, "Acetamide: E (carbonyl) should be > 0"
+    assert ac[1] > 0, "Acetamide: A (acceptor) should be > 0"
+    assert ac[0] > 0, "Acetamide: D (donor) should be > 0"
+
+    # Benzene: R == 6, T == 0
+    bz = m._compute_pharmacophore_counts(m.canonicalize_smiles("c1ccccc1"))
+    assert bz[2] == 6, f"Benzene: R should be 6, got {bz[2]}"
+    assert bz[3] == 0, f"Benzene: T (sp3 C) should be 0, got {bz[3]}"
+    assert bz[11] > 0, f"Benzene: G (ring closures) should be > 0, got {bz[11]}"
+
+    # Chlorobenzene: X == 1, R == 6
+    cb = m._compute_pharmacophore_counts(m.canonicalize_smiles("Clc1ccccc1"))
+    assert cb[9] == 1, f"Chlorobenzene: X should be 1, got {cb[9]}"
+    assert cb[2] == 6, f"Chlorobenzene: R should be 6, got {cb[2]}"
+
+    # Ethanol: D > 0, A > 0, T == 2, L == 1
+    et = m._compute_pharmacophore_counts(m.canonicalize_smiles("CCO"))
+    assert et[0] > 0, "Ethanol: D (donor) should be > 0"
+    assert et[1] > 0, "Ethanol: A (acceptor) should be > 0"
+    assert et[3] == 2, f"Ethanol: T (sp3 C) should be 2, got {et[3]}"
+    assert et[4] == 1, f"Ethanol: L (lipophilic run) should be 1, got {et[4]}"
+
+    # 5. Pairwise consistency: fp[12 + pair_idx(i,j)] <= fp[i] and <= fp[j]
+    fp_count = m.pharmacophoric_fingerprint("CC(=O)Nc1ccc(O)cc1")
+    counts_12 = fp_count[:12]
+    pair_idx = 0
+    for i in range(12):
+        for j in range(i + 1, 12):
+            pw = fp_count[12 + pair_idx]
+            assert pw <= counts_12[i] + 1e-9, \
+                f"Pairwise[{i},{j}]={pw} > count[{i}]={counts_12[i]}"
+            assert pw <= counts_12[j] + 1e-9, \
+                f"Pairwise[{i},{j}]={pw} > count[{j}]={counts_12[j]}"
+            pair_idx += 1
+
+    # 6. Zero / invalid SMILES returns zero vector without raising
+    fp_empty = m.pharmacophoric_fingerprint("")
+    assert fp_empty.shape == (78,)
+    assert (fp_empty == 0).all(), "Empty SMILES should yield zero vector"
+
+    fp_invalid = m.pharmacophoric_fingerprint("not_a_smiles_XYZ_###")
+    assert fp_invalid.shape == (78,)
+    # Should not raise; values may or may not be zero depending on tokenization
+
+    # 7. Feature names length
+    names = m.get_pharmacophoric_feature_names()
+    assert len(names) == 78, f"Expected 78 feature names, got {len(names)}"
+    assert names[0] == "pharm_D"
+    assert names[11] == "pharm_G"
+    assert names[12] == "pharm_DA"
+    assert names[77] == "pharm_SG"
