@@ -80,6 +80,23 @@ _INCHI_EXCLUDED = frozenset(["tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe
 # methods invalid for SELFIES representation
 _SELFIES_EXCLUDED = frozenset(["tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe", "smifp", "lingo"])
 
+# ---------------------------------------------------------------------------
+# TF-IDF pruning
+#
+# Running the full ngram grid (1,1)–(6,6) = 21 combos per tokenizer family
+# is a hyperparameter sweep. Empirically (4,4) performs best; we keep a small
+# representative set to cut ~7× off TF-IDF compute time.
+#
+# BPE merge-count axis: 7 sizes (16–1024 + full). Keep three representatives
+# spanning the range plus the full-vocabulary model.
+# ---------------------------------------------------------------------------
+
+# ngram suffixes to keep, e.g. "11", "12", "44"
+_TFIDF_KEEP_NGRAMS = frozenset(["11", "12", "44"])
+
+# BPE merge counts to keep (plus the unsuffixed full-vocabulary variant)
+_BPE_KEEP_SIZES = frozenset(["64", "256", "1024"])
+
 
 # ---------------------------------------------------------------------------
 # Variant definitions
@@ -202,27 +219,70 @@ def check_available(requires: list[str]) -> list[str]:
     return missing
 
 
+def _is_tfidf_method_kept(name: str) -> bool:
+    """
+    Return False for TF-IDF methods that fall outside the pruned ngram/BPE grid.
+
+    Kept:
+      - Non-TF-IDF methods (always kept).
+      - tok-{family}_tfidf{mn} where mn ∈ _TFIDF_KEEP_NGRAMS.
+      - tok-bpe{k}_tfidf{mn} where k ∈ _BPE_KEEP_SIZES and mn ∈ _TFIDF_KEEP_NGRAMS.
+      - The unsuffixed aliases (tok-smiles_tfidf, tok-bpe_tfidf, …) which map to (1,2).
+      - tok-bpe{k}_tfidf (unsuffixed alias) where k ∈ _BPE_KEEP_SIZES.
+
+    Excluded:
+      - tok-{family}_tfidf{mn} where mn ∉ _TFIDF_KEEP_NGRAMS.
+      - tok-bpe{k}_tfidf{mn/alias} where k ∉ _BPE_KEEP_SIZES.
+    """
+    if not name.startswith("tok-"):
+        return True
+    # Identify tfidf methods by the "_tfidf" marker
+    tfidf_idx = name.find("_tfidf")
+    if tfidf_idx == -1:
+        return True  # not a tfidf method
+
+    ngram_suffix = name[tfidf_idx + len("_tfidf"):]  # e.g. "44", "12", "" (alias)
+    prefix = name[:tfidf_idx]  # e.g. "tok-smiles", "tok-bpe64", "tok-bpe"
+
+    # Check ngram suffix: "" (alias → maps to "12") is always kept
+    if ngram_suffix and ngram_suffix not in _TFIDF_KEEP_NGRAMS:
+        return False
+
+    # For BPE methods, also check the merge-count size
+    # prefix is "tok-bpe{k}" for fixed-size or "tok-bpe" for full-vocab
+    if prefix.startswith("tok-bpe"):
+        size_str = prefix[len("tok-bpe"):]  # e.g. "64", "256", "" (full-vocab)
+        if size_str and size_str not in _BPE_KEEP_SIZES:
+            return False
+
+    return True
+
+
 def get_valid_methods(variant: dict) -> list[str] | None:
     """
-    Return the list of method names valid for this variant, or None if all methods
-    are allowed (i.e. no exclusions — caller should use --all-methods).
+    Return the list of method names valid for this variant.
 
-    Methods are excluded when their name starts with any prefix in the variant's
-    'excluded_method_prefixes' set. To add a new exclusion, either extend one of
-    the _INCHI_EXCLUDED / _SELFIES_EXCLUDED sets above, or add a new
-    'excluded_method_prefixes' key to a variant entry.
+    Always applies TF-IDF/BPE pruning (_TFIDF_KEEP_NGRAMS, _BPE_KEEP_SIZES).
+    Additionally filters by variant's 'excluded_method_prefixes' when present.
+
+    Returns None only when no filtering at all is needed (no exclusions and
+    TF-IDF pruning is off), so the caller can use --all-methods instead.
     """
     excluded_prefixes = variant.get("excluded_method_prefixes", frozenset())
-    if not excluded_prefixes:
-        return None  # no filtering needed
 
-    import smiles_similarity_kernels as _ssk  # lazy import — only when filtering
+    import smiles_similarity_kernels as _ssk  # lazy import
 
     valid = [
         name
         for name in _ssk.AVAILABLE_METHODS
         if not any(name.startswith(pfx) for pfx in excluded_prefixes)
+        and _is_tfidf_method_kept(name)
     ]
+
+    # If nothing was filtered out, signal the caller to use --all-methods
+    if len(valid) == len(_ssk.AVAILABLE_METHODS):
+        return None
+
     return valid
 
 
@@ -246,7 +306,7 @@ def run_variant(
         return False, f"missing: {', '.join(missing)}", 0.0, []
 
     stem = variant_stem(variant)
-    output_file = output_dir / f"{stem}.csv"
+    output_file = output_dir / f"{stem}.csv.gz"
 
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tf:
         timing_log = Path(tf.name)
@@ -265,7 +325,7 @@ def run_variant(
         "--database",
         str(database),
         "--output",
-        str(output_file),
+        str(output_file),  # .csv.gz — smiles_similarity_kernels.py detects extension
         *method_args,
         "--timing-log",
         str(timing_log),
@@ -299,9 +359,9 @@ def run_variant(
 
 
 def count_outputs(output_dir: Path, stem: str) -> int:
-    """Count files written for a variant (pattern: {stem}__{method}.csv)."""
+    """Count files written for a variant (pattern: {stem}__{method}.csv.gz)."""
     clean = stem.rstrip("_")
-    return len(list(output_dir.glob(f"{clean}__*.csv")))
+    return len(list(output_dir.glob(f"{clean}__*.csv.gz")))
 
 
 def parse_args() -> argparse.Namespace:
@@ -388,7 +448,7 @@ def main() -> None:
                 "--database",
                 str(database),
                 "--output",
-                str(output_dir / f"{stem}.csv"),
+                str(output_dir / f"{stem}.csv.gz"),
                 *method_args,
                 *variant["extra_args"],
             ]
