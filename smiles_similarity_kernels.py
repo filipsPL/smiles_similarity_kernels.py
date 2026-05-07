@@ -3761,7 +3761,7 @@ def read_smiles_directory(dirpath: str) -> Dict[str, str]:
 
 def write_similarity_csv(output_path: str, library_names: List[str], template_names: List[str], sim_matrix: np.ndarray):
     """
-    Write similarity matrix to CSV file.
+    Write similarity matrix to CSV or CSV.gz file.
 
     Output format:
     Name,Similarity_{template1},Similarity_{template2},...
@@ -3769,7 +3769,7 @@ def write_similarity_csv(output_path: str, library_names: List[str], template_na
     Parameters
     ----------
     output_path : str
-        Output CSV file path
+        Output file path. If it ends with '.gz', written as gzip-compressed CSV.
     library_names : List[str]
         Names of library molecules (rows)
     template_names : List[str]
@@ -3777,16 +3777,13 @@ def write_similarity_csv(output_path: str, library_names: List[str], template_na
     sim_matrix : np.ndarray
         Similarity matrix (library x templates)
     """
-    # Create column names
-    columns = ["Name"] + [f"Similarity_{name}" for name in template_names]
-
-    # Create DataFrame
     data = {"Name": library_names}
     for j, template_name in enumerate(template_names):
         data[f"Similarity_{template_name}"] = sim_matrix[:, j]
 
     df = pd.DataFrame(data)
-    df.to_csv(output_path, index=False, float_format="%.5f")
+    compression = "gzip" if str(output_path).endswith(".gz") else None
+    df.to_csv(output_path, index=False, float_format="%.5f", compression=compression)
 
 
 # ============================================================================
@@ -4313,9 +4310,14 @@ def main():
         if multi_output:
             output_path = Path(args.output)
             # stem is e.g. "smiles__replaced" or "inchi_all__" (trailing __ when no mods)
-            # final name: "{repr}__{mods}__{method}.csv"
-            stem = output_path.stem.rstrip("_")
-            method_output = output_path.parent / f"{stem}__{method}.csv"
+            # Strip both .csv.gz and .csv suffixes to get the bare variant stem.
+            stem = output_path.name
+            for suffix in (".csv.gz", ".csv"):
+                if stem.endswith(suffix):
+                    stem = stem[: -len(suffix)]
+                    break
+            stem = stem.rstrip("_")
+            method_output = output_path.parent / f"{stem}__{method}.csv.gz"
         else:
             method_output = args.output
 
