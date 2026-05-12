@@ -3,7 +3,7 @@
 
 cff-version: 1.2.0
 title: >-
-  Python implementation of the java SMILES-based compound similarity functions for ligand-based virtual screening
+  SMILES-based Similarity Kernels for Ligand-Based Virtual Screening
 type: dataset
 authors:
   - orcid: "https://orcid.org/0000-0001-5758-9416"

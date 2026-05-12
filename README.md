@@ -1,4 +1,4 @@
-# SMILES-based Similarity Kernels
+# SMILES-based Similarity Kernels for Ligand-Based Virtual Screening
 
 ## **tl;dr**
 
@@ -51,6 +51,8 @@ Python implementation of SMILES-based compound similarity functions for ligand-b
 [![Python manual install](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/python-install.yml) [![CodeQL Advanced](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/codeql.yml) [![osv scanner](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/osv-scanner.yml/badge.svg)](https://github.com/filipsPL/smiles_similarity_kernels.py/actions/workflows/osv-scanner.yml)
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18457244.svg)](https://doi.org/10.5281/zenodo.18457244)
+
+This research was funded in part by the National Science Centre in Poland (grant number 2020/39/B/NZ2/03127 to F.S.)
 
 ## Overview
 
