@@ -662,11 +662,7 @@ def sort_string(s: str) -> str:
     >>> sort_string("CCO")
     'CCO'
     >>> sort_string("c1ccccc1")
-<<<<<<< HEAD
     '11cccccc'
-=======
-    '1cccccc'
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
     """
     return "".join(sorted(s))
 
@@ -917,7 +913,9 @@ def clcs_similarity(smiles1: str, smiles2: str, w1: float = 0.33, w2: float = 0.
         Similarity score
     """
     if abs(w1 + w2 + w3 - 1.0) > 1e-9:
-        warnings.warn(f"clcs_similarity: weights w1={w1}, w2={w2}, w3={w3} sum to {w1+w2+w3:.6g}, not 1. Scores will be off-scale.", stacklevel=2)
+        warnings.warn(
+            f"clcs_similarity: weights w1={w1}, w2={w2}, w3={w3} sum to {w1+w2+w3:.6g}, not 1. Scores will be off-scale.", stacklevel=2
+        )
 
     if preprocess:
         smiles1 = preprocess_smiles(smiles1)
@@ -2159,44 +2157,11 @@ def smiles_tfidf_similarity(
     float
         Cosine similarity in [0, 1]
     """
-<<<<<<< HEAD
-    return _tfidf_cosine_similarity(
-        smiles1, smiles2, SMILESTokenizer, "smiles_tfidf_similarity", corpus, ngram_range, vectorizer
-    )
+    return _tfidf_cosine_similarity(smiles1, smiles2, SMILESTokenizer, "smiles_tfidf_similarity", corpus, ngram_range, vectorizer)
 
 
 # ============================================================================
 # 10b. Schwaller TF-IDF Cosine Similarity
-=======
-    if not SKLEARN_AVAILABLE:
-        raise ImportError("sklearn is required for smiles_tfidf_similarity")
-
-    if vectorizer is None:
-        if corpus is None:
-            corpus = [smiles1, smiles2]
-        tokenizer = SMILESTokenizer()
-        vectorizer = TfidfVectorizer(
-            tokenizer=tokenizer,
-            analyzer="word",
-            lowercase=False,
-            token_pattern=None,
-            ngram_range=ngram_range,
-            min_df=1,
-            sublinear_tf=True,
-        )
-        try:
-            vectorizer.fit(corpus)
-        except ValueError:
-            return 0.0
-
-    vec1 = vectorizer.transform([smiles1])
-    vec2 = vectorizer.transform([smiles2])
-    return float(sklearn_cosine_similarity(vec1, vec2)[0, 0])
-
-
-# ============================================================================
-# 10. Schwaller TF-IDF Cosine Similarity
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 # ============================================================================
 
 
@@ -2282,44 +2247,11 @@ def schwaller_tfidf_similarity(
     float
         Cosine similarity in [0, 1]
     """
-<<<<<<< HEAD
-    return _tfidf_cosine_similarity(
-        smiles1, smiles2, SMILESTokenizerSchwaller, "schwaller_tfidf_similarity", corpus, ngram_range, vectorizer
-    )
+    return _tfidf_cosine_similarity(smiles1, smiles2, SMILESTokenizerSchwaller, "schwaller_tfidf_similarity", corpus, ngram_range, vectorizer)
 
 
 # ============================================================================
 # 10c. BPE TF-IDF Cosine Similarity
-=======
-    if not SKLEARN_AVAILABLE:
-        raise ImportError("sklearn is required for schwaller_tfidf_similarity")
-
-    if vectorizer is None:
-        if corpus is None:
-            corpus = [smiles1, smiles2]
-        tokenizer = SMILESTokenizerSchwaller()
-        vectorizer = TfidfVectorizer(
-            tokenizer=tokenizer,
-            analyzer="word",
-            lowercase=False,
-            token_pattern=None,
-            ngram_range=ngram_range,
-            min_df=1,
-            sublinear_tf=True,
-        )
-        try:
-            vectorizer.fit(corpus)
-        except ValueError:
-            return 0.0
-
-    vec1 = vectorizer.transform([smiles1])
-    vec2 = vectorizer.transform([smiles2])
-    return float(sklearn_cosine_similarity(vec1, vec2)[0, 0])
-
-
-# ============================================================================
-# 10b. BPE TF-IDF Cosine Similarity
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 # ============================================================================
 
 
@@ -2438,7 +2370,6 @@ def bpe_tfidf_similarity(
     float
         Cosine similarity in [0, 1]
     """
-<<<<<<< HEAD
     return _tfidf_cosine_similarity(
         smiles1,
         smiles2,
@@ -2452,36 +2383,6 @@ def bpe_tfidf_similarity(
 
 # ============================================================================
 # 10d. SELFIES TF-IDF Cosine Similarity
-=======
-    if not SKLEARN_AVAILABLE:
-        raise ImportError("sklearn is required for bpe_tfidf_similarity")
-
-    if vectorizer is None:
-        if corpus is None:
-            corpus = [smiles1, smiles2]
-        tokenizer = SMILESTokenizerBPE(vocab_path=vocab_path, num_merges=num_merges)
-        vectorizer = TfidfVectorizer(
-            tokenizer=tokenizer,
-            analyzer="word",
-            lowercase=False,
-            token_pattern=None,
-            ngram_range=ngram_range,
-            min_df=1,
-            sublinear_tf=True,
-        )
-        try:
-            vectorizer.fit(corpus)
-        except ValueError:
-            return 0.0
-
-    vec1 = vectorizer.transform([smiles1])
-    vec2 = vectorizer.transform([smiles2])
-    return float(sklearn_cosine_similarity(vec1, vec2)[0, 0])
-
-
-# ============================================================================
-# 10c. SELFIES TF-IDF Cosine Similarity
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 # ============================================================================
 
 
@@ -2544,30 +2445,8 @@ def selfies_tfidf_similarity(
     float
         Cosine similarity in [0, 1]
     """
-    return _tfidf_cosine_similarity(
-        selfies1, selfies2, SELFIESTokenizer, "selfies_tfidf_similarity", corpus, ngram_range, vectorizer
-    )
+    return _tfidf_cosine_similarity(selfies1, selfies2, SELFIESTokenizer, "selfies_tfidf_similarity", corpus, ngram_range, vectorizer)
 
-<<<<<<< HEAD
-=======
-    if vectorizer is None:
-        if corpus is None:
-            corpus = [selfies1, selfies2]
-        tokenizer = SELFIESTokenizer()
-        vectorizer = TfidfVectorizer(
-            tokenizer=tokenizer,
-            analyzer="word",
-            lowercase=False,
-            token_pattern=None,
-            ngram_range=ngram_range,
-            min_df=1,
-            sublinear_tf=True,
-        )
-        try:
-            vectorizer.fit(corpus)
-        except ValueError:
-            return 0.0
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
 # ============================================================================
 # 10e. Token-level Edit Distance Similarity
@@ -2921,7 +2800,6 @@ def bpe_pattern_fingerprint(
     means rare merged tokens at the end of the merge list are only set for
     molecules that contain the exact corresponding substructure.
     """
-<<<<<<< HEAD
     # One tokenizer instance owns both the merge table (→ feature dimensions)
     # and the tokenization, so the merge logic is not duplicated here.  It also
     # raises FileNotFoundError when the vocabulary is missing.
@@ -2931,39 +2809,6 @@ def bpe_pattern_fingerprint(
     merged_tokens = [a + b for a, b in tokenizer._merges]
 
     token_counts = Counter(tokenizer.tokenize(smiles))
-=======
-    path = Path(vocab_path) if vocab_path is not None else _DEFAULT_BPE_VOCAB
-    if not path.exists():
-        raise FileNotFoundError(
-            f"BPE vocabulary file not found: {path}\n"
-            "Train one with train_bpe_tokenizer.py or pass vocab_path= explicitly."
-        )
-    data = json.loads(path.read_text())
-    all_merges: list = [tuple(pair) for pair in data.get("merges", [])]
-    merges = all_merges[:num_merges] if num_merges is not None else all_merges
-
-    # Build the merged token vocabulary (one dimension per merge).
-    merged_tokens = [a + b for a, b in merges]
-
-    # Tokenize using BPE (same logic as SMILESTokenizerBPE.tokenize).
-    _base_re = SMILESTokenizerBPE._BASE_RE
-    tokens = _base_re.findall(smiles)
-    for a, b in merges:
-        ab = a + b
-        out = []
-        i = 0
-        while i < len(tokens):
-            if i < len(tokens) - 1 and tokens[i] == a and tokens[i + 1] == b:
-                out.append(ab)
-                i += 2
-            else:
-                out.append(tokens[i])
-                i += 1
-        tokens = out
-
-    # Count occurrences of each merged token.
-    token_counts = Counter(tokens)
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
     fp = np.array([float(token_counts.get(tok, 0)) for tok in merged_tokens], dtype=float)
     if binary:
         fp = (fp > 0).astype(float)
@@ -2975,7 +2820,7 @@ def bpe_pattern_fingerprint(
 # ============================================================================
 
 # Fixed ordered alphabet — indices must never change (they determine feature positions).
-PHASMIFP_CLASSES = ['D', 'A', 'R', 'T', 'L', 'P', 'M', 'Q', 'E', 'X', 'S', 'G']
+PHASMIFP_CLASSES = ["D", "A", "R", "T", "L", "P", "M", "Q", "E", "X", "S", "G"]
 
 # Reuse the Schwaller tokenizer regex for token-level detection.
 _PHARM_TOKEN_RE = SMILESTokenizerSchwaller._TOKEN_RE
@@ -2983,9 +2828,9 @@ _PHARM_TOKEN_RE = SMILESTokenizerSchwaller._TOKEN_RE
 
 def _is_carbon_token(tok: str) -> bool:
     """Return True if *tok* represents a carbon atom (bare C/c or bracket [C...]/ [c...])."""
-    if tok in ('C', 'c'):
+    if tok in ("C", "c"):
         return True
-    if tok.startswith('[') and tok[1:2] in ('C', 'c'):
+    if tok.startswith("[") and tok[1:2] in ("C", "c"):
         return True
     return False
 
@@ -3026,36 +2871,36 @@ def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
     in_lipophilic_run = False
 
     for i, tok in enumerate(tokens):
-        is_bracket = tok.startswith('[')
+        is_bracket = tok.startswith("[")
 
         # D — H-bond donor:
         #   • bare N or O — implicit H by SMILES valence rules (N has 3 bonds, O has 2)
         #   • bracket atoms with explicit H: [NH2], [OH], [nH], [NH2+], [NH-], etc.
-        if tok in ('N', 'O'):
+        if tok in ("N", "O"):
             counts[0] += 1  # D (bare, has implicit H unless charge/over-valenced)
         elif is_bracket:
             inner = tok[1:-1]
-            if inner and inner[0] in ('N', 'O', 'n', 'o') and 'H' in inner:
+            if inner and inner[0] in ("N", "O", "n", "o") and "H" in inner:
                 counts[0] += 1  # D (explicit H in bracket)
 
         # A — H-bond acceptor: bare N, O, n, o, F; bracket [N]/[O]/[F] without '+'
-        if tok in ('N', 'O', 'n', 'o', 'F'):
+        if tok in ("N", "O", "n", "o", "F"):
             counts[1] += 1  # A
         elif is_bracket:
             inner = tok[1:-1]
-            if inner and inner[0] in ('N', 'O', 'F', 'n', 'o', 'f') and '+' not in inner:
+            if inner and inner[0] in ("N", "O", "F", "n", "o", "f") and "+" not in inner:
                 counts[1] += 1  # A
 
         # R — aromatic bare atom
-        if tok in ('c', 'n', 'o', 's', 'p'):
+        if tok in ("c", "n", "o", "s", "p"):
             counts[2] += 1  # R
 
         # T — sp3 carbon: bare 'C' (tokenizer gives Cl as one token, so bare C is safe)
-        if tok == 'C':
+        if tok == "C":
             counts[3] += 1  # T
 
         # L — lipophilic run: count transitions into a C/c run
-        is_carbon = tok in ('C', 'c')
+        is_carbon = tok in ("C", "c")
         if is_carbon and not in_lipophilic_run:
             counts[4] += 1  # L — new run starts
             in_lipophilic_run = True
@@ -3065,19 +2910,19 @@ def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
         # P — positive ionizable: bracket N/n with explicit '+'
         if is_bracket:
             inner = tok[1:-1]
-            if inner and inner[0] in ('N', 'n') and '+' in inner:
+            if inner and inner[0] in ("N", "n") and "+" in inner:
                 counts[5] += 1  # P
 
         # M — negative ionizable: bracket O/N/S/s with explicit '-'
         if is_bracket:
             inner = tok[1:-1]
-            if inner and inner[0] in ('O', 'N', 'S', 'o', 'n', 's') and '-' in inner:
+            if inner and inner[0] in ("O", "N", "S", "o", "n", "s") and "-" in inner:
                 counts[6] += 1  # M
 
         # Q — quaternary N+: bracket [N+] without any H
         if is_bracket:
             inner = tok[1:-1]
-            if inner.startswith('N+') and 'H' not in inner:
+            if inner.startswith("N+") and "H" not in inner:
                 counts[7] += 1  # Q
 
         # E — carbonyl: any '=O' bond where the other atom is C/c.
@@ -3085,61 +2930,61 @@ def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
         #   C=O  (C before =)  and  O=C  (O before =, aldehyde/ketone head form)
         # Look both one step back and one step forward from '='.
         # To avoid double-counting a single =O group, only count at '='.
-        if tok == '=' and i + 1 < n_tokens and i > 0:
+        if tok == "=" and i + 1 < n_tokens and i > 0:
             next_tok = tokens[i + 1]
             prev_tok_raw = tokens[i - 1]
 
             # resolve branch-open: if '=' is right after '(' the parent atom is further back
-            if prev_tok_raw == '(':
+            if prev_tok_raw == "(":
                 # find atom before '(' skipping any closed branches
                 j = i - 2
-                while j >= 0 and tokens[j] == ')':
+                while j >= 0 and tokens[j] == ")":
                     depth = 0
                     while j >= 0:
-                        if tokens[j] == ')':
+                        if tokens[j] == ")":
                             depth += 1
-                        elif tokens[j] == '(':
+                        elif tokens[j] == "(":
                             depth -= 1
                             if depth == 0:
                                 j -= 1
                                 break
                         j -= 1
-                prev_atom = tokens[j] if j >= 0 else ''
+                prev_atom = tokens[j] if j >= 0 else ""
             else:
                 # skip past any closed branches before '='
                 j = i - 1
-                while j >= 0 and tokens[j] == ')':
+                while j >= 0 and tokens[j] == ")":
                     depth = 0
                     while j >= 0:
-                        if tokens[j] == ')':
+                        if tokens[j] == ")":
                             depth += 1
-                        elif tokens[j] == '(':
+                        elif tokens[j] == "(":
                             depth -= 1
                             if depth == 0:
                                 j -= 1
                                 break
                         j -= 1
-                prev_atom = tokens[j] if j >= 0 else ''
+                prev_atom = tokens[j] if j >= 0 else ""
 
             # pattern 1: C=O  (carbon before '=', oxygen after)
-            if next_tok == 'O' and _is_carbon_token(prev_atom):
+            if next_tok == "O" and _is_carbon_token(prev_atom):
                 counts[8] += 1  # E
             # pattern 2: O=C  (oxygen before '=', carbon after)
-            elif prev_atom == 'O' and _is_carbon_token(next_tok):
+            elif prev_atom == "O" and _is_carbon_token(next_tok):
                 counts[8] += 1  # E
 
         # X — halogen: bare F, Cl, Br, I (tokenizer gives Cl/Br as single tokens)
-        if tok in ('F', 'Cl', 'Br', 'I'):
+        if tok in ("F", "Cl", "Br", "I"):
             counts[9] += 1  # X
 
         # S — sulfur: bare S/s, or bracket atom starting with S
-        if tok in ('S', 's'):
+        if tok in ("S", "s"):
             counts[10] += 1  # S
-        elif is_bracket and tok[1:2] in ('S', 's'):
+        elif is_bracket and tok[1:2] in ("S", "s"):
             counts[10] += 1  # S
 
         # G — ring closure: single digit 1-9, or %NN token
-        if (len(tok) == 1 and tok.isdigit() and tok != '0') or tok.startswith('%'):
+        if (len(tok) == 1 and tok.isdigit() and tok != "0") or tok.startswith("%"):
             counts[11] += 1  # G
 
     return counts
@@ -3162,7 +3007,7 @@ def get_pharmacophoric_feature_names() -> List[str]:
 
 def pharmacophoric_fingerprint(
     smiles: str,
-    output: str = 'count',
+    output: str = "count",
 ) -> np.ndarray:
     """
     PhaSMIfp: 78D pharmacophoric SMILES fingerprint.
@@ -3209,9 +3054,9 @@ def pharmacophoric_fingerprint(
 
     fp_78 = np.concatenate([counts, pairs]).astype(float)
 
-    if output == 'binary':
+    if output == "binary":
         return (fp_78 > 0).astype(float)
-    elif output == 'normalized':
+    elif output == "normalized":
         total = counts.sum()
         return fp_78 / total if total > 0 else fp_78
     else:
@@ -3295,29 +3140,27 @@ AVAILABLE_FINGERPRINTS: Dict[str, dict] = {
         "params": {"output": "count"},
     },
     "phasmifp_binary": {
-        "function": lambda smi, **kw: pharmacophoric_fingerprint(smi, output='binary', **kw),
+        "function": lambda smi, **kw: pharmacophoric_fingerprint(smi, output="binary", **kw),
         "description": "PhaSMIfp 78D pharmacophoric hologram (binary presence/absence)",
         "length": 78,
         "params": {"output": "binary"},
     },
     "phasmifp_normalized": {
-        "function": lambda smi, **kw: pharmacophoric_fingerprint(smi, output='normalized', **kw),
+        "function": lambda smi, **kw: pharmacophoric_fingerprint(smi, output="normalized", **kw),
         "description": "PhaSMIfp 78D pharmacophoric hologram (normalized float)",
         "length": 78,
         "params": {"output": "normalized"},
     },
     "phasmifp12": {
-        "function": lambda smi, **kw: _compute_pharmacophore_counts(
-            (canonicalize_smiles(smi) if RDKIT_AVAILABLE else smi) or smi
-        ),
+        "function": lambda smi, **kw: _compute_pharmacophore_counts((canonicalize_smiles(smi) if RDKIT_AVAILABLE else smi) or smi),
         "description": "PhaSMIfp 12D pharmacophoric class count vector only (no pairwise layer)",
         "length": 12,
         "params": {},
     },
     "phasmifp12_binary": {
-        "function": lambda smi, **kw: (_compute_pharmacophore_counts(
-            (canonicalize_smiles(smi) if RDKIT_AVAILABLE else smi) or smi
-        ) > 0).astype(float),
+        "function": lambda smi, **kw: (_compute_pharmacophore_counts((canonicalize_smiles(smi) if RDKIT_AVAILABLE else smi) or smi) > 0).astype(
+            float
+        ),
         "description": "PhaSMIfp 12D pharmacophoric class binary vector only (no pairwise layer)",
         "length": 12,
         "params": {},
@@ -3328,10 +3171,7 @@ AVAILABLE_FINGERPRINTS: Dict[str, dict] = {
 def get_fingerprint_function(fp_type: str):
     """Return the fingerprint function for *fp_type*, checking availability."""
     if fp_type not in AVAILABLE_FINGERPRINTS:
-        raise ValueError(
-            f"Unknown fingerprint type: '{fp_type}'. "
-            f"Available: {list(AVAILABLE_FINGERPRINTS.keys())}"
-        )
+        raise ValueError(f"Unknown fingerprint type: '{fp_type}'. " f"Available: {list(AVAILABLE_FINGERPRINTS.keys())}")
     entry = AVAILABLE_FINGERPRINTS[fp_type]
     req = entry.get("requires")
     if req == "sklearn" and not SKLEARN_AVAILABLE:
@@ -3696,7 +3536,6 @@ def get_similarity_function(method: str) -> Callable:
 # ============================================================================
 
 
-<<<<<<< HEAD
 # TF-IDF method names follow ``tok-<family>[<merges>]_tfidf[<m><n>]``
 # (e.g. tok-smiles_tfidf44, tok-schwaller_tfidf, tok-bpe512_tfidf12).  This anchored
 # pattern is the single source of truth for the tokenizer family, replacing fragile
@@ -3742,8 +3581,6 @@ def _make_batch_tfidf_vectorizer(family: str, params: dict):
     )
 
 
-=======
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 def _build_batch_kwargs(sim_func, method: str, corpus: List[str], kwargs: dict) -> dict:
     """
     Prepare kwargs for batch similarity calls:
@@ -3761,7 +3598,6 @@ def _build_batch_kwargs(sim_func, method: str, corpus: List[str], kwargs: dict) 
         filtered = {}
         params = {}
 
-<<<<<<< HEAD
     # Preprocess each string once rather than once per pair.  Rebind rather than
     # mutate in place: the caller uses the returned list, so an in-place side
     # effect on the argument would be surprising and is not relied upon.
@@ -3786,74 +3622,10 @@ def _build_batch_kwargs(sim_func, method: str, corpus: List[str], kwargs: dict) 
                 filtered = {**filtered, "vectorizer": vec}
         except Exception:
             pass  # Fall back to per-pair fitting if anything goes wrong.
-=======
-    # Preprocess each string once rather than once per pair.
-    if filtered.get("preprocess", True) and "preprocess" in params:
-        corpus[:] = [preprocess_smiles(s) for s in corpus]
-        filtered = {**filtered, "preprocess": False}
-
-    # For TF-IDF methods, fit one vectorizer on the full corpus so IDF weights
-    # reflect the whole dataset rather than each individual pair.
-    if "tfidf" in method and "vectorizer" not in filtered:
-        _tfidf_funcs = {
-            "smiles": smiles_tfidf_similarity,
-            "schwaller": schwaller_tfidf_similarity,
-            "bpe": bpe_tfidf_similarity,
-            "selfies": selfies_tfidf_similarity,
-            "lingo": lingo_tfidf_similarity,
-        }
-        underlying = next((fn for key, fn in _tfidf_funcs.items() if key in method), None)
-        if underlying is not None and SKLEARN_AVAILABLE:
-            extra = {k: v for k, v in filtered.items() if k not in ("vectorizer", "corpus", "preprocess")}
-            try:
-                # Fit by passing the full corpus; discard the returned score.
-                underlying(corpus[0], corpus[0], corpus=corpus, **extra)
-                # The fitted vectorizer lives inside the closure — we need it directly.
-                # Build it the same way the similarity function does.
-                from sklearn.feature_extraction.text import TfidfVectorizer as _TV
-
-                tok_map = {
-                    "smiles": SMILESTokenizer,
-                    "schwaller": SMILESTokenizerSchwaller,
-                    "selfies": SELFIESTokenizer,
-                }
-                if "bpe" in method:
-                    num_merges = filtered.get("num_merges", None)
-                    tokenizer = SMILESTokenizerBPE(num_merges=num_merges)
-                elif "lingo" in method:
-                    tokenizer = None  # LingoVectorizer has its own fit path
-                else:
-                    tok_cls = next((cls for key, cls in tok_map.items() if key in method), None)
-                    tokenizer = tok_cls() if tok_cls else None
-
-                if "lingo" in method:
-                    q = filtered.get("q", 4)
-                    vec = LingoVectorizer(q=q, use_idf=True)
-                    vec.fit(corpus)
-                elif tokenizer is not None:
-                    ngram_range = filtered.get("ngram_range", (1, 2))
-                    vec = _TV(
-                        tokenizer=tokenizer,
-                        analyzer="word",
-                        lowercase=False,
-                        token_pattern=None,
-                        ngram_range=ngram_range,
-                        min_df=1,
-                        sublinear_tf=True,
-                    )
-                    vec.fit(corpus)
-                else:
-                    vec = None
-                if vec is not None:
-                    filtered = {**filtered, "vectorizer": vec}
-            except Exception:
-                pass  # Fall back to per-pair fitting if anything goes wrong.
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
     return filtered, corpus
 
 
-<<<<<<< HEAD
 # ============================================================================
 # Featurize-once batch acceleration
 # ============================================================================
@@ -4124,9 +3896,6 @@ def _resolve_batch_featurizer(method: str, kwargs: dict) -> Optional[Tuple[Calla
 
 
 def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", symmetric: Optional[bool] = None, **kwargs) -> np.ndarray:
-=======
-def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", **kwargs) -> np.ndarray:
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
     """
     Compute pairwise similarity matrix for a list of SMILES.
 
@@ -4158,17 +3927,11 @@ def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", **k
     n = len(smiles_list)
     sim_matrix = np.zeros((n, n))
 
-<<<<<<< HEAD
     if symmetric is None:
         symmetric = is_symmetric_method(method, kwargs)
 
     sim_func = get_similarity_function(method)  # also enforces optional-dependency checks
     smiles_list = list(smiles_list)
-=======
-    sim_func = get_similarity_function(method)
-    smiles_list = list(smiles_list)
-    filtered_kwargs, smiles_list = _build_batch_kwargs(sim_func, method, smiles_list, kwargs)
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
     # Fast path: featurize each string once, then only combine per pair.  The
     # featurizer owns its normalization (preprocess each string once here), so
@@ -4228,7 +3991,6 @@ def compute_cross_similarity_matrix(templates: List[str], library: List[str], me
     n_templates = len(templates)
     sim_matrix = np.zeros((n_lib, n_templates))
 
-<<<<<<< HEAD
     sim_func = get_similarity_function(method)  # also enforces optional-dependency checks
     templates = list(templates)
     library = list(library)
@@ -4249,13 +4011,6 @@ def compute_cross_similarity_matrix(templates: List[str], library: List[str], me
                 # methods (query-weighted Tversky) the library molecule is the query.
                 sim_matrix[i, j] = combine(lf, tfeats[j])
         return sim_matrix
-=======
-    sim_func = get_similarity_function(method)
-    corpus = list(templates) + list(library)
-    filtered_kwargs, corpus = _build_batch_kwargs(sim_func, method, corpus, kwargs)
-    templates = corpus[:n_templates]
-    library = corpus[n_templates:]
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
     # General path: per-pair evaluation, corpus preprocessed once up front.
     corpus = templates + library
@@ -4629,12 +4384,8 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
                    smifp38_cbd, smifp38_tanimoto, lingo, lingo3, lingo5,
                    lingo_tversky, lingo_tversky_sym, lingo_dice, lingo_ruzicka,
                    spectrum, spectrum3, spectrum5, spectrum_cosine,
-<<<<<<< HEAD
                    mismatch, mismatch3, mismatch5, lcs_substring, token_edit,
                    subsequence, subsequence2, subsequence4,
-=======
-                   mismatch, mismatch3, mismatch5, lcs_substring,
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
                    tok-smiles_tfidf, tok-smiles_tfidf{m}{n} (m=1..6, n=m..6, e.g. tok-smiles_tfidf44),
                    tok-schwaller_tfidf, tok-schwaller_tfidf{m}{n} (m=1..6, n=m..6, e.g. tok-schwaller_tfidf44),
                    tok-bpe_tfidf, tok-bpe_tfidf{m}{n} (m=1..6, n=m..6, e.g. tok-bpe_tfidf44),
@@ -4794,10 +4545,7 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
         default=None,
         metavar="TYPE",
         choices=list(AVAILABLE_FINGERPRINTS.keys()),
-        help=(
-            "Compute fingerprints instead of similarities. "
-            "TYPE is one of: " + ", ".join(AVAILABLE_FINGERPRINTS.keys())
-        ),
+        help=("Compute fingerprints instead of similarities. " "TYPE is one of: " + ", ".join(AVAILABLE_FINGERPRINTS.keys())),
     )
     fp_group.add_argument(
         "--list-fingerprints",
