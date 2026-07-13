@@ -86,7 +86,8 @@ CLI usage:
 """
 
 import re
-import os
+
+# import os
 import sys
 import json
 import time

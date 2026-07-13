@@ -6,10 +6,11 @@ Run with:
     pytest test_smiles_similarity_kernels.py -v -k "lingo"  # single group
 """
 
-import math
+#  import math
 import subprocess
 import sys
-import tempfile
+
+# import tempfile
 from pathlib import Path
 
 import numpy as np
