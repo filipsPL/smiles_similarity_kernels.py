@@ -255,6 +255,9 @@ Motivated by [our paper](https://doi.org/10.1093/bib/bbaf620) where query-weight
 | `lingo_tversky`     | `lingo_tversky_similarity` | **Asymmetric Tversky on LINGO q-grams** (q=4, α=0.9, β=0.1) — query-weighted | —        |
 | `lingo_tversky_sym` | `lingo_tversky_similarity` | Symmetric Tversky (α=β=0.5, equivalent to Dice) on LINGO q-grams             | —        |
 | `lingo_dice`        | `lingo_dice_similarity`    | Sørensen–Dice coefficient on LINGO q-gram counts (q=4)                       | —        |
+| `lingo_ruzicka`     | `lingo_ruzicka_similarity` | Ruzicka / weighted Jaccard on LINGO q-gram counts (q=4): Σmin/Σmax = Tversky(α=β=1) | —        |
+
+> **Ruzicka note:** `lingo_ruzicka` is the count-aware generalisation of the Jaccard index, `Σ_i min(N₁ᵢ,N₂ᵢ) / Σ_i max(N₁ᵢ,N₂ᵢ)` over q-gram multiplicities. It equals the multiset Tversky with α=β=1 (implemented by delegating to it) and is **distinct** from the vector/cosine-Tanimoto in `spectrum` (`dot/(‖A‖²+‖B‖²−dot)`) and from Dice. Symmetric, in [0, 1].
 
 > **Asymmetry note:** `lingo_tversky` treats the *first* argument as the query (template) and the *second* as the database candidate. Swapping arguments will in general yield different values. This mirrors the "query-weighted Tversky" convention used in our paper [Bajusz et al. (2025)](https://doi.org/10.1093/bib/bbaf620).
 
@@ -272,8 +275,13 @@ Classical string-kernel methods from the biological-sequence literature, ported 
 | `mismatch3`       | `mismatch_kernel_similarity`          | Mismatch kernel, k=3, m=1                                                     | —        |
 | `mismatch5`       | `mismatch_kernel_similarity`          | Mismatch kernel, k=5, m=1                                                     | —        |
 | `lcs_substring`   | `longest_common_substring_similarity` | Normalised Longest Common **Substring** (contiguous): LCSubstr² / (len1·len2) | —        |
+| `subsequence`     | `subsequence_kernel_similarity`       | **Gap-weighted subsequence kernel** (Lodhi et al. 2002), n=3, λ=0.5           | —        |
+| `subsequence2`    | `subsequence_kernel_similarity`       | Subsequence kernel, n=2, λ=0.5                                                | —        |
+| `subsequence4`    | `subsequence_kernel_similarity`       | Subsequence kernel, n=4, λ=0.5                                                | —        |
 
 > **Mismatch cost note:** the neighbourhood size grows roughly as `C(k, m) * (|alphabet|-1)^m`. For SMILES alphabets of ~30–50 symbols, m=1 with k ≤ 5 is practical; m=2 is expensive and rarely useful.
+
+> **Subsequence-kernel note:** `subsequence` matches length-`n` subsequences whose characters need **not** be contiguous, weighting each occurrence by `λ^span` (span = last − first index + 1) so that gappy matches count for less — capturing scaffolds interrupted by substituents. It is cosine-normalised to [0, 1] via `K(S1,S2)/√(K(S1,S1)·K(S2,S2))`. Cost is `O(n·|S1|·|S2|)` per pair (a full DP, like `edit`/`nlcs`); `λ` and `n` are tunable via the function. The efficient DP (Lodhi et al. 2002) is verified against a brute-force enumeration of the kernel definition in the test suite.
 
 ### TF-IDF (extensions)
 
@@ -400,11 +408,14 @@ python smiles_similarity_kernels.py \
 
 | CLI name              | Function                         | Description                                                         | Requires  |
 | --------------------- | -------------------------------- | ------------------------------------------------------------------- | --------- |
+| `token_edit`          | `token_edit_similarity`          | Levenshtein edit distance over **atom-level tokens** (Schwaller), not characters | —         |
 | `damerau_levenshtein` | `damerau_levenshtein_similarity` | Like edit distance but transpositions cost 1 (not 2)                | jellyfish |
 | `jaro`                | `jaro_similarity`                | Jaro similarity                                                     | jellyfish |
 | `jaro_winkler`        | `jaro_winkler_similarity`        | Jaro-Winkler (prefix-weighted)                                      | jellyfish |
 | `hamming`             | `hamming_similarity`             | Hamming distance, shorter string padded                             | jellyfish |
 | `ncd`                 | `ncd_similarity`                 | Normalized Compression Distance via gzip; universal, parameter-free | —         |
+
+> **Token-edit note:** `token_edit` tokenizes each SMILES into chemically-meaningful units with the Schwaller atom-level tokenizer (`[nH+]`, `[C@@H]`, `Br`, ring digits and bond symbols are each one token) and computes Levenshtein distance over the *token sequences*, normalized by the larger token count: `1 - editdistance(tok(S1), tok(S2)) / max(|tok(S1)|, |tok(S2)|)`. A one-atom change costs exactly one edit — chemically more interpretable than the character-level `edit`. Pass a different `tokenizer=` (e.g. `SMILESTokenizerBPE`) to score at fragment granularity. `preprocess` is ignored: the tokenizer already handles multi-character atoms.
 
 > **NCD note:** compression-based similarity is semantically unaware of chemistry — it detects string-level patterns, not structural features. Best used with `--canonicalize` and for near-duplicate detection or benchmarking. See source docstring for a full assessment.
 
@@ -658,6 +669,8 @@ sim_matrix = compute_cross_similarity_matrix(templates, library, method='lingo')
 # shape: (4, 2)
 ```
 
+> **Asymmetric methods:** `compute_similarity_matrix` mirrors the upper triangle only for symmetric methods. For the query-weighted `lingo_tversky` (α≠β) it computes both `[i, j]` and `[j, i]` independently, so the matrix is correctly asymmetric. Symmetry is auto-detected; pass `symmetric=True`/`False` to override. `compute_cross_similarity_matrix` always computes every cell directly and is unaffected.
+
 ## Input / Output Formats
 
 **SMILES files (`.smi`)** — space/tab-separated, no header:
@@ -706,7 +719,10 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `--shuffle`                   |       | **[augment]** Randomly shuffle characters — **negative control**, type-agnostic, applied after all conversions                                      |
 | `--shuffle-seed SEED`         |       | **[augment]** Random seed for `--shuffle` (default: non-reproducible).                                                                              |
 | `--sort`                      |       | **[augment]** Sort characters alphabetically — **deterministic negative control**, type-agnostic, applied after all conversions                     |
+<<<<<<< HEAD
+=======
 | `--overwrite`                 |       | Overwrite existing output files. Without this flag, existing files are **skipped with a warning** printed to stderr.                                |
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 | `--verbose`, `-v`             |       | Print progress                                                                                                                                      |
 | `--templates-smiles-col COL`  |       | SMILES column name/index in templates file                                                                                                          |
 | `--templates-name-col COL`    |       | Name column in templates file                                                                                                                       |
@@ -737,6 +753,24 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 
 ## Performance
 
+<<<<<<< HEAD
+Batch helpers (`compute_similarity_matrix`, `compute_cross_similarity_matrix`) use a **featurize-once** fast path for feature-based methods (`lingo*`, `spectrum*`, `substring`, `smifp*`, `ncd`): each molecule's representation is computed a single time and only the cheap pairwise reduction runs per pair, instead of re-deriving both molecules' features on every comparison. On multi-template screens this is ~3–10× faster (e.g. `substring` ~10×, `spectrum`/`smifp` ~7–8×) and produces bit-for-bit identical results. Methods with inherently pairwise cost (edit/NLCS/CLCS DP, mismatch, TF-IDF) are unaffected.
+
+| Method                                            | Complexity     | Notes                                                       |
+| ------------------------------------------------- | -------------- | ----------------------------------------------------------- |
+| `lingo`, `lingo_tversky`, `lingo_dice`, `smifp_*` | O(n)           | Fastest — recommended for large-scale screening             |
+| `spectrum`                                        | O(n)           | Very fast, equivalent cost to LINGO                         |
+| `mismatch` (k=4, m=1)                             | O(n·k·\|Σ\|)   | ~20–50× slower than `spectrum` for typical SMILES alphabets |
+| `mismatch` (m≥2)                                  | O(n·k²·\|Σ\|²) | Expensive — use only for short SMILES or small alphabets    |
+| `lcs_substring`                                   | O(m×n)         | DP — same cost as `nlcs`                                    |
+| `edit`, `nlcs`, `clcs`, `token_edit`              | O(m×n)         | DP — slow for long SMILES (`token_edit` over tokens, so m,n are token counts) |
+| `subsequence` (n, λ)                              | O(n·m·m')      | Gap-weighted DP; self-kernels cached once per string in batch |
+| `substring`                                       | O(m²+n²)       | Can be slow for long SMILES                                 |
+| `smiles_tfidf{m}{n}`, `selfies_tfidf{m}{n}`       | O(corpus)      | Fit once on full corpus for batch use; cost grows with n    |
+| `ncd`                                             | O(n log n)     | Compression overhead; fine for millions                     |
+| jellyfish methods                                 | O(n)           | Very fast via C extension                                   |
+
+=======
 | Method                                              | Complexity     | Notes                                                       |
 | --------------------------------------------------- | -------------- | ----------------------------------------------------------- |
 | `lingo`, `lingo_tversky`, `lingo_dice`, `smifp_*`   | O(n)           | Fastest — recommended for large-scale screening             |
@@ -749,6 +783,7 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `tok-smiles_tfidf{m}{n}`, `tok-selfies_tfidf{m}{n}` | O(corpus)      | Fit once on full corpus for batch use; cost grows with n    |
 | `ncd`                                               | O(n log n)     | Compression overhead; fine for millions                     |
 | jellyfish methods                                   | O(n)           | Very fast via C extension                                   |
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
 ## Citation
 

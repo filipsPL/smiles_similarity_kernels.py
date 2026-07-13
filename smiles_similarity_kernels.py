@@ -220,10 +220,12 @@ ELEMENT_REPLACEMENTS = {
     "Ta": "º",
     "Re": "»",
     "Tc": "¼",
-    # Single-character element symbols that would otherwise be confused
-    # with SMILES atom tokens if left unencoded when they appear inside
-    # bracket atoms (e.g. [W], [V], [U]).  We encode them here so that
-    # downstream string-similarity methods treat them as atomic units.
+    # Single-character element symbols (W, V, U) mapped to unique Unicode purely
+    # for completeness of the element table and a canonical preprocessed form.
+    # NOTE: unlike the multi-character entries above, these do NOT affect any
+    # similarity score — a 1:1 single-char relabeling is invariant for every
+    # metric here (edit distance, LCS, q-gram multisets, character counts), and
+    # W/V/U are already atomic tokens.  Kept for consistency, not correctness.
     "W": "·",  # Tungsten
     "V": "¸",  # Vanadium
     "U": "Ë",  # Uranium
@@ -660,7 +662,11 @@ def sort_string(s: str) -> str:
     >>> sort_string("CCO")
     'CCO'
     >>> sort_string("c1ccccc1")
+<<<<<<< HEAD
+    '11cccccc'
+=======
     '1cccccc'
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
     """
     return "".join(sorted(s))
 
@@ -1062,7 +1068,14 @@ SMIFP_CHARS_34 = [
 # Extended 38 characters (adding chirality and directional bonds)
 SMIFP_CHARS_38 = SMIFP_CHARS_34.copy()
 SMIFP_CHARS_38.remove("%")  # Remove '%' as it's rare
-SMIFP_CHARS_38.extend(["/", "\\", "@@"])
+# NOTE: the fingerprint counts characters of the (usually preprocessed) string with
+# Counter, whose keys are single characters.  The '@@' chirality token therefore has
+# to be represented by its post-preprocess single-character sentinel — counting the
+# literal two-character "@@" always yields 0 (Counter never has multi-char keys, and
+# preprocess_smiles has already rewritten '@@' -> the sentinel by the time counting
+# happens).  Using the sentinel makes the chirality dimension live under the default
+# preprocess=True path.
+SMIFP_CHARS_38.extend(["/", "\\", ELEMENT_REPLACEMENTS["@@"]])
 
 
 def smiles_to_fingerprint(smiles: str, chars: List[str] = None) -> np.ndarray:
@@ -1359,6 +1372,45 @@ def lingo_dice_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bo
         Dice similarity in [0, 1].
     """
     return lingo_tversky_similarity(smiles1, smiles2, q=q, alpha=0.5, beta=0.5, preprocess=preprocess)
+
+
+def lingo_ruzicka_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True) -> float:
+    """
+    Ruzicka similarity (weighted Jaccard) on LINGO (q-gram) count multisets.
+
+        S(A, B) = Σ_i min(N(A,i), N(B,i)) / Σ_i max(N(A,i), N(B,i))
+
+    where N(A,i)/N(B,i) are the multiplicities of q-gram *i* in the two
+    molecules.  Ruzicka is the count-aware generalisation of the Jaccard
+    index: on binary presence/absence vectors it reduces to Jaccard, and on
+    counts it weights each shared q-gram by how many times it actually
+    co-occurs.  Because max = min + |difference|, this is algebraically
+    identical to the multiset Tversky index with ``alpha = beta = 1``, so it
+    is implemented by delegating to :func:`lingo_tversky_similarity` — no new
+    formula to maintain.
+
+    It is **distinct** from the vector/cosine-Tanimoto used by
+    :func:`spectrum_kernel_similarity` (``dot / (||A||² + ||B||² − dot)``),
+    which is not the same coefficient on count vectors, and from the Dice
+    coefficient (:func:`lingo_dice_similarity`, alpha=beta=0.5), which weights
+    shared q-grams more heavily.  Ruzicka is symmetric and lies in [0, 1]
+    (1 iff the q-gram multisets are identical, 0 iff they are disjoint).
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+        SMILES strings to compare.
+    q : int
+        LINGO length (default 4).
+    preprocess : bool
+        Whether to preprocess SMILES.
+
+    Returns
+    -------
+    float
+        Ruzicka (weighted Jaccard) similarity in [0, 1].
+    """
+    return lingo_tversky_similarity(smiles1, smiles2, q=q, alpha=1.0, beta=1.0, preprocess=preprocess)
 
 
 # ============================================================================
@@ -1662,6 +1714,128 @@ def longest_common_substring_similarity(smiles1: str, smiles2: str, preprocess: 
 
 
 # ============================================================================
+# 9b. Gap-weighted Subsequence String Kernel (SSK)
+# ============================================================================
+
+
+def _subsequence_kernel_raw(s: str, t: str, n: int, lam: float) -> float:
+    """
+    Raw (un-normalised) gap-weighted subsequence kernel value K_n(s, t).
+
+    Implements the O(n·|s|·|t|) dynamic program of Lodhi et al. (2002).  The
+    kernel sums over every length-``n`` subsequence ``u`` shared by ``s`` and
+    ``t``, weighting each occurrence by ``lam`` raised to the *span* it covers
+    (last index − first index + 1, so interior gaps are penalised):
+
+        K_n(s, t) = Σ_u ( Σ_{i: s[i]=u} lam^span(i) ) ( Σ_{j: t[j]=u} lam^span(j) )
+
+    Verified bit-for-bit against a brute-force enumeration of this definition.
+    Returns 0.0 when either string is shorter than ``n``.
+    """
+    ls, lt = len(s), len(t)
+    if ls < n or lt < n:
+        return 0.0
+
+    # Kp = K'_{i-1}(s[:a], t[:b]); K'_0 = 1 for all prefixes (incl. empty ones).
+    Kp = [[1.0] * (lt + 1) for _ in range(ls + 1)]
+
+    for _ in range(1, n):
+        curr = [[0.0] * (lt + 1) for _ in range(ls + 1)]
+        for a in range(1, ls + 1):
+            sa = s[a - 1]
+            kpp = 0.0  # K''_i(a, b), rolled over b
+            curr_a = curr[a]
+            curr_am1 = curr[a - 1]
+            kp_am1 = Kp[a - 1]
+            for b in range(1, lt + 1):
+                # K''_i(a,b) = lam*(K''_i(a,b-1) + lam*K'_{i-1}(a-1,b-1)·[s_a==t_b])
+                if sa == t[b - 1]:
+                    kpp = lam * (kpp + lam * kp_am1[b - 1])
+                else:
+                    kpp = lam * kpp
+                # K'_i(a,b) = lam*K'_i(a-1,b) + K''_i(a,b)
+                curr_a[b] = lam * curr_am1[b] + kpp
+        Kp = curr
+
+    # Final level: K_n(s,t) = Σ_{a,b: s_a==t_b} lam² · K'_{n-1}(a-1, b-1)
+    lam2 = lam * lam
+    total = 0.0
+    for a in range(1, ls + 1):
+        sa = s[a - 1]
+        kp_am1 = Kp[a - 1]
+        for b in range(1, lt + 1):
+            if sa == t[b - 1]:
+                total += lam2 * kp_am1[b - 1]
+    return total
+
+
+def subsequence_kernel_similarity(
+    smiles1: str,
+    smiles2: str,
+    n: int = 3,
+    lam: float = 0.5,
+    normalized: bool = True,
+    preprocess: bool = True,
+) -> float:
+    """
+    Gap-weighted subsequence string kernel similarity (Lodhi et al. 2002).
+
+    Unlike the contiguous :func:`substring_kernel_similarity`, this kernel
+    matches subsequences whose characters need **not** be adjacent, but
+    discounts them by ``lam`` per unit of span so that tightly-packed matches
+    count for more than gappy ones.  This captures conserved scaffolds that are
+    interrupted by substituents in the SMILES string.
+
+        sim(S1, S2) = K_n(S1, S2) / sqrt(K_n(S1, S1) · K_n(S2, S2))
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+        SMILES strings to compare.
+    n : int
+        Subsequence length (default 3).
+    lam : float
+        Decay factor in (0, 1] penalising gaps; smaller ``lam`` penalises gaps
+        more strongly.  Default 0.5.
+    normalized : bool
+        If True (default) return the cosine-normalised kernel in [0, 1]; if
+        False return the raw kernel value.
+    preprocess : bool
+        Whether to apply SMILES multi-character preprocessing.
+
+    Returns
+    -------
+    float
+        Normalised similarity in [0, 1] (or the raw kernel if ``normalized`` is
+        False).  When both strings are shorter than ``n`` the result is 1.0 iff
+        they are identical, else 0.0 (matching :func:`spectrum_kernel_similarity`).
+
+    References
+    ----------
+    Lodhi H., Saunders C., Shawe-Taylor J., Cristianini N., Watkins C.
+    "Text classification using string kernels." JMLR 2 (2002) 419–444.
+    """
+    if preprocess:
+        smiles1 = preprocess_smiles(smiles1)
+        smiles2 = preprocess_smiles(smiles2)
+
+    if len(smiles1) < n and len(smiles2) < n:
+        return 1.0 if smiles1 == smiles2 else 0.0
+    if len(smiles1) < n or len(smiles2) < n:
+        return 0.0
+
+    k12 = _subsequence_kernel_raw(smiles1, smiles2, n, lam)
+    if not normalized:
+        return k12
+
+    k11 = _subsequence_kernel_raw(smiles1, smiles1, n, lam)
+    k22 = _subsequence_kernel_raw(smiles2, smiles2, n, lam)
+    if k11 <= 0.0 or k22 <= 0.0:
+        return 0.0
+    return k12 / np.sqrt(k11 * k22)
+
+
+# ============================================================================
 # 10. LINGO-based TF and TF-IDF Cosine Similarity
 # ============================================================================
 
@@ -1810,7 +1984,7 @@ def lingo_tfidf_similarity(smiles1: str, smiles2: str, q: int = 4, corpus: List[
 
 
 # ============================================================================
-# 9. SMILES TF-IDF Cosine Similarity (chemical tokenization)
+# 10a. SMILES TF-IDF Cosine Similarity (chemical tokenization)
 # ============================================================================
 
 
@@ -1905,6 +2079,46 @@ class SMILESTokenizer:
         return self.tokenize(smiles)
 
 
+def _tfidf_cosine_similarity(s1, s2, make_tokenizer, func_name, corpus, ngram_range, vectorizer):
+    """
+    Shared implementation for the tokenizer-backed TF-IDF cosine methods.
+
+    The four public ``*_tfidf_similarity`` functions differ only in their
+    tokenizer, so they all delegate here — the fit / transform / cosine logic
+    lives in exactly one place.  ``make_tokenizer`` is a zero-argument callable
+    returning a fresh tokenizer instance; ``func_name`` is used only for the
+    ImportError message so it names the caller.
+
+    Behaviour is identical to the original per-method bodies: when no fitted
+    ``vectorizer`` is supplied one is fit on ``corpus`` (defaulting to the two
+    inputs), an empty-vocabulary ``ValueError`` returns 0.0, and any tokenizer
+    construction error (e.g. a missing BPE vocab file) propagates unchanged.
+    """
+    if not SKLEARN_AVAILABLE:
+        raise ImportError(f"sklearn is required for {func_name}")
+
+    if vectorizer is None:
+        if corpus is None:
+            corpus = [s1, s2]
+        vectorizer = TfidfVectorizer(
+            tokenizer=make_tokenizer(),
+            analyzer="word",
+            lowercase=False,
+            token_pattern=None,
+            ngram_range=ngram_range,
+            min_df=1,
+            sublinear_tf=True,
+        )
+        try:
+            vectorizer.fit(corpus)
+        except ValueError:
+            return 0.0
+
+    vec1 = vectorizer.transform([s1])
+    vec2 = vectorizer.transform([s2])
+    return float(sklearn_cosine_similarity(vec1, vec2)[0, 0])
+
+
 def smiles_tfidf_similarity(
     smiles1: str,
     smiles2: str,
@@ -1945,6 +2159,15 @@ def smiles_tfidf_similarity(
     float
         Cosine similarity in [0, 1]
     """
+<<<<<<< HEAD
+    return _tfidf_cosine_similarity(
+        smiles1, smiles2, SMILESTokenizer, "smiles_tfidf_similarity", corpus, ngram_range, vectorizer
+    )
+
+
+# ============================================================================
+# 10b. Schwaller TF-IDF Cosine Similarity
+=======
     if not SKLEARN_AVAILABLE:
         raise ImportError("sklearn is required for smiles_tfidf_similarity")
 
@@ -1973,6 +2196,7 @@ def smiles_tfidf_similarity(
 
 # ============================================================================
 # 10. Schwaller TF-IDF Cosine Similarity
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 # ============================================================================
 
 
@@ -2058,6 +2282,15 @@ def schwaller_tfidf_similarity(
     float
         Cosine similarity in [0, 1]
     """
+<<<<<<< HEAD
+    return _tfidf_cosine_similarity(
+        smiles1, smiles2, SMILESTokenizerSchwaller, "schwaller_tfidf_similarity", corpus, ngram_range, vectorizer
+    )
+
+
+# ============================================================================
+# 10c. BPE TF-IDF Cosine Similarity
+=======
     if not SKLEARN_AVAILABLE:
         raise ImportError("sklearn is required for schwaller_tfidf_similarity")
 
@@ -2086,6 +2319,7 @@ def schwaller_tfidf_similarity(
 
 # ============================================================================
 # 10b. BPE TF-IDF Cosine Similarity
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 # ============================================================================
 
 
@@ -2204,6 +2438,21 @@ def bpe_tfidf_similarity(
     float
         Cosine similarity in [0, 1]
     """
+<<<<<<< HEAD
+    return _tfidf_cosine_similarity(
+        smiles1,
+        smiles2,
+        lambda: SMILESTokenizerBPE(vocab_path=vocab_path, num_merges=num_merges),
+        "bpe_tfidf_similarity",
+        corpus,
+        ngram_range,
+        vectorizer,
+    )
+
+
+# ============================================================================
+# 10d. SELFIES TF-IDF Cosine Similarity
+=======
     if not SKLEARN_AVAILABLE:
         raise ImportError("sklearn is required for bpe_tfidf_similarity")
 
@@ -2232,6 +2481,7 @@ def bpe_tfidf_similarity(
 
 # ============================================================================
 # 10c. SELFIES TF-IDF Cosine Similarity
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 # ============================================================================
 
 
@@ -2294,9 +2544,12 @@ def selfies_tfidf_similarity(
     float
         Cosine similarity in [0, 1]
     """
-    if not SKLEARN_AVAILABLE:
-        raise ImportError("sklearn is required for selfies_tfidf_similarity")
+    return _tfidf_cosine_similarity(
+        selfies1, selfies2, SELFIESTokenizer, "selfies_tfidf_similarity", corpus, ngram_range, vectorizer
+    )
 
+<<<<<<< HEAD
+=======
     if vectorizer is None:
         if corpus is None:
             corpus = [selfies1, selfies2]
@@ -2314,10 +2567,70 @@ def selfies_tfidf_similarity(
             vectorizer.fit(corpus)
         except ValueError:
             return 0.0
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
-    vec1 = vectorizer.transform([selfies1])
-    vec2 = vectorizer.transform([selfies2])
-    return float(sklearn_cosine_similarity(vec1, vec2)[0, 0])
+# ============================================================================
+# 10e. Token-level Edit Distance Similarity
+# ============================================================================
+
+
+def token_edit_similarity(smiles1: str, smiles2: str, tokenizer=None, preprocess: bool = False) -> float:
+    """
+    Levenshtein edit similarity over chemically-meaningful *tokens* instead of
+    raw characters.
+
+    Standard :func:`edit_similarity` operates on characters (after multi-character
+    atoms are collapsed to single characters by ``preprocess_smiles``).  This
+    variant first splits each SMILES into atom-level tokens with a chemical
+    tokenizer — so a bracket atom such as ``[nH+]`` or ``[C@@H]`` is a single
+    unit — then computes the Levenshtein distance over the *token sequences*.  A
+    one-atom change therefore costs exactly one edit, which is more chemically
+    interpretable than the several character edits the same change incurs at the
+    character level (e.g. ``[nH+]`` → ``[nH]`` is 1 token edit but 2 char edits).
+
+        sim(S1, S2) = 1 - editdistance(tok(S1), tok(S2)) / max(|tok(S1)|, |tok(S2)|)
+
+    where ``tok`` is the tokenizer and each token insert/delete/substitute costs 1.
+    The score lies in [0, 1]: 1.0 for identical token sequences (edit distance 0),
+    0.0 when the sequences share no alignment.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+        SMILES strings to compare.
+    tokenizer : callable, optional
+        A callable ``str -> List[str]`` (e.g. an instance of
+        :class:`SMILESTokenizerSchwaller`, :class:`SMILESTokenizer`, or
+        :class:`SMILESTokenizerBPE`).  Defaults to
+        :class:`SMILESTokenizerSchwaller` (atom-level, the de-facto standard).
+    preprocess : bool
+        Accepted for API compatibility but **ignored**: the tokenizer already
+        treats multi-character atoms (``Cl``, ``Br``, ``[nH+]``, …) as indivisible
+        tokens, so character-level substitution is neither needed nor applied.
+        (Mirrors the tokenizer-backed TF-IDF methods.)
+
+    Returns
+    -------
+    float
+        Similarity in [0, 1].
+
+    Examples
+    --------
+    >>> token_edit_similarity("c1ccccc1", "c1ccccc1")
+    1.0
+    """
+    if tokenizer is None:
+        tokenizer = SMILESTokenizerSchwaller()
+
+    toks1 = tokenizer(smiles1)
+    toks2 = tokenizer(smiles2)
+
+    if len(toks1) == 0 and len(toks2) == 0:
+        return 1.0
+
+    ed = edit_distance(toks1, toks2)
+    max_len = max(len(toks1), len(toks2))
+    return 1.0 - ed / max_len
 
 
 # ============================================================================
@@ -2440,7 +2753,7 @@ def hamming_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> f
 
 
 # ============================================================================
-# 11. Normalized Compression Distance (NCD) similarity
+# 12. Normalized Compression Distance (NCD) similarity
 # ============================================================================
 
 
@@ -2608,6 +2921,17 @@ def bpe_pattern_fingerprint(
     means rare merged tokens at the end of the merge list are only set for
     molecules that contain the exact corresponding substructure.
     """
+<<<<<<< HEAD
+    # One tokenizer instance owns both the merge table (→ feature dimensions)
+    # and the tokenization, so the merge logic is not duplicated here.  It also
+    # raises FileNotFoundError when the vocabulary is missing.
+    tokenizer = SMILESTokenizerBPE(vocab_path=vocab_path, num_merges=num_merges)
+
+    # One fingerprint dimension per *merged* token (base single-char tokens excluded).
+    merged_tokens = [a + b for a, b in tokenizer._merges]
+
+    token_counts = Counter(tokenizer.tokenize(smiles))
+=======
     path = Path(vocab_path) if vocab_path is not None else _DEFAULT_BPE_VOCAB
     if not path.exists():
         raise FileNotFoundError(
@@ -2639,6 +2963,7 @@ def bpe_pattern_fingerprint(
 
     # Count occurrences of each merged token.
     token_counts = Counter(tokens)
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
     fp = np.array([float(token_counts.get(tok, 0)) for tok in merged_tokens], dtype=float)
     if binary:
         fp = (fp > 0).astype(float)
@@ -3125,6 +3450,11 @@ AVAILABLE_METHODS = {
         "description": "Sørensen-Dice coefficient on LINGO q-gram counts (q=4)",
         "params": {"q": 4},
     },
+    "lingo_ruzicka": {
+        "function": lingo_ruzicka_similarity,
+        "description": "Ruzicka (weighted Jaccard) on LINGO q-gram counts (q=4) — Σmin/Σmax, i.e. Tversky(α=β=1)",
+        "params": {"q": 4},
+    },
     "spectrum": {
         "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=4, coefficient="tanimoto", **kw),
         "description": "Spectrum kernel (k=4, Tanimoto) — classical fixed-k string kernel",
@@ -3164,6 +3494,26 @@ AVAILABLE_METHODS = {
         "function": longest_common_substring_similarity,
         "description": "Normalised Longest Common Substring (contiguous) — LCSubstr²/(len1×len2)",
         "params": {},
+    },
+    "token_edit": {
+        "function": token_edit_similarity,
+        "description": "Levenshtein edit distance over Schwaller atom-level tokens (chemically-aware edit distance)",
+        "params": {},
+    },
+    "subsequence": {
+        "function": subsequence_kernel_similarity,
+        "description": "Gap-weighted subsequence string kernel (Lodhi et al. 2002; n=3, lambda=0.5)",
+        "params": {"n": 3, "lam": 0.5},
+    },
+    "subsequence2": {
+        "function": lambda s1, s2, **kw: subsequence_kernel_similarity(s1, s2, n=2, lam=0.5, **kw),
+        "description": "Gap-weighted subsequence string kernel (n=2, lambda=0.5)",
+        "params": {"n": 2, "lam": 0.5},
+    },
+    "subsequence4": {
+        "function": lambda s1, s2, **kw: subsequence_kernel_similarity(s1, s2, n=4, lam=0.5, **kw),
+        "description": "Gap-weighted subsequence string kernel (n=4, lambda=0.5)",
+        "params": {"n": 4, "lam": 0.5},
     },
     **{
         f"tok-smiles_tfidf{m}{n}": {
@@ -3286,6 +3636,28 @@ AVAILABLE_METHODS = {
 }
 
 
+# Methods whose default parameters make them asymmetric: sim(a, b) != sim(b, a).
+# Used by compute_similarity_matrix to decide whether the upper triangle may be
+# mirrored into the lower triangle.  lingo_tversky defaults to alpha=0.9, beta=0.1
+# (query-weighted); its _sym / dice variants are symmetric and are not listed.
+ASYMMETRIC_METHODS = {"lingo_tversky"}
+
+
+def is_symmetric_method(method: str, kwargs: Optional[dict] = None) -> bool:
+    """
+    Best-effort test for whether ``method`` yields a symmetric similarity, i.e.
+    ``sim(a, b) == sim(b, a)`` for all inputs.
+
+    A method is treated as asymmetric if it is listed in :data:`ASYMMETRIC_METHODS`.
+    Explicit Tversky weights passed via ``kwargs`` override that default: equal
+    ``alpha``/``beta`` are symmetric, unequal are not.
+    """
+    kwargs = kwargs or {}
+    if "alpha" in kwargs and "beta" in kwargs:
+        return kwargs["alpha"] == kwargs["beta"]
+    return method not in ASYMMETRIC_METHODS
+
+
 def get_similarity_function(method: str) -> Callable:
     """
     Get similarity function by method name.
@@ -3324,6 +3696,54 @@ def get_similarity_function(method: str) -> Callable:
 # ============================================================================
 
 
+<<<<<<< HEAD
+# TF-IDF method names follow ``tok-<family>[<merges>]_tfidf[<m><n>]``
+# (e.g. tok-smiles_tfidf44, tok-schwaller_tfidf, tok-bpe512_tfidf12).  This anchored
+# pattern is the single source of truth for the tokenizer family, replacing fragile
+# ``"<family>" in method`` substring tests.
+_TFIDF_FAMILY_RE = re.compile(r"tok-([a-z]+?)\d*_tfidf")
+
+
+def _tfidf_family(method: str) -> Optional[str]:
+    """Return the tokenizer family ('smiles'/'schwaller'/'bpe'/'selfies') of a
+    TF-IDF method name, or ``None`` if *method* is not a TF-IDF method."""
+    match = _TFIDF_FAMILY_RE.match(method)
+    return match.group(1) if match else None
+
+
+def _make_batch_tfidf_vectorizer(family: str, params: dict):
+    """
+    Build a single **unfitted** vectorizer for a TF-IDF method family.
+
+    ``params`` supplies ``ngram_range`` / ``num_merges`` / ``q`` — these are baked
+    into each method's registry entry (and its function lambda), so they must be
+    read from the registry ``params``, not from the batch ``kwargs`` (which only
+    carry ``preprocess``).  Returns ``None`` for an unknown family.
+    """
+    if family == "lingo":
+        return LingoVectorizer(q=params.get("q", 4), use_idf=True)
+    _tokenizer_factories = {
+        "smiles": SMILESTokenizer,
+        "schwaller": SMILESTokenizerSchwaller,
+        "selfies": SELFIESTokenizer,
+        "bpe": lambda: SMILESTokenizerBPE(num_merges=params.get("num_merges")),
+    }
+    factory = _tokenizer_factories.get(family)
+    if factory is None:
+        return None
+    return TfidfVectorizer(
+        tokenizer=factory(),
+        analyzer="word",
+        lowercase=False,
+        token_pattern=None,
+        ngram_range=params.get("ngram_range", (1, 2)),
+        min_df=1,
+        sublinear_tf=True,
+    )
+
+
+=======
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 def _build_batch_kwargs(sim_func, method: str, corpus: List[str], kwargs: dict) -> dict:
     """
     Prepare kwargs for batch similarity calls:
@@ -3341,6 +3761,32 @@ def _build_batch_kwargs(sim_func, method: str, corpus: List[str], kwargs: dict) 
         filtered = {}
         params = {}
 
+<<<<<<< HEAD
+    # Preprocess each string once rather than once per pair.  Rebind rather than
+    # mutate in place: the caller uses the returned list, so an in-place side
+    # effect on the argument would be surprising and is not relied upon.
+    if filtered.get("preprocess", True) and "preprocess" in params:
+        corpus = [preprocess_smiles(s) for s in corpus]
+        filtered = {**filtered, "preprocess": False}
+
+    # For TF-IDF methods, fit ONE vectorizer on the full corpus so IDF weights
+    # reflect the whole dataset rather than each individual pair.  The vectorizer
+    # is built directly (no throwaway warm-up call) using the method's registered
+    # ngram_range / num_merges, then passed to every pairwise call via vectorizer=.
+    family = _tfidf_family(method)
+    if family is not None and "vectorizer" not in filtered and SKLEARN_AVAILABLE:
+        registry_params = dict(AVAILABLE_METHODS.get(method, {}).get("params", {}))
+        for key in ("ngram_range", "num_merges", "q"):
+            if key in kwargs:  # explicit user override wins over the registry default
+                registry_params[key] = kwargs[key]
+        try:
+            vec = _make_batch_tfidf_vectorizer(family, registry_params)
+            if vec is not None:
+                vec.fit(corpus)
+                filtered = {**filtered, "vectorizer": vec}
+        except Exception:
+            pass  # Fall back to per-pair fitting if anything goes wrong.
+=======
     # Preprocess each string once rather than once per pair.
     if filtered.get("preprocess", True) and "preprocess" in params:
         corpus[:] = [preprocess_smiles(s) for s in corpus]
@@ -3402,11 +3848,285 @@ def _build_batch_kwargs(sim_func, method: str, corpus: List[str], kwargs: dict) 
                     filtered = {**filtered, "vectorizer": vec}
             except Exception:
                 pass  # Fall back to per-pair fitting if anything goes wrong.
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
     return filtered, corpus
 
 
+<<<<<<< HEAD
+# ============================================================================
+# Featurize-once batch acceleration
+# ============================================================================
+#
+# The standalone similarity functions (e.g. ``lingo_similarity``) re-derive the
+# per-string representation of BOTH arguments on every call.  In a matrix that
+# re-featurizes each string O(N) or O(M) times.  The featurizers below split a
+# feature-based method into two steps:
+#
+#     featurize(string) -> repr          # compute once per unique string
+#     combine(repr, repr) -> float       # cheap pairwise reduction
+#
+# The batch helpers call ``featurize`` once per string and then only ``combine``
+# per pair, which removes the redundant work while producing numerically
+# identical results to the per-pair path.
+#
+# Featurizers assume the input string is already in its final normalized form:
+# ``_build_batch_kwargs`` applies ``preprocess_smiles`` to the corpus once (and
+# sets ``preprocess=False``), so featurizers must NOT preprocess again.  Methods
+# not registered here (edit/nlcs/clcs DP, mismatch, jellyfish, TF-IDF) fall back
+# to the per-pair path unchanged.
+
+
+def _combine_lingo_sim(c1: Counter, c2: Counter) -> float:
+    """Averaged per-q-gram agreement (mirrors :func:`lingo_similarity`)."""
+    all_keys = set(c1) | set(c2)
+    if not all_keys:
+        return 1.0
+    total = 0.0
+    for lg in all_keys:
+        n1 = c1.get(lg, 0)
+        n2 = c2.get(lg, 0)
+        denom = n1 + n2
+        if denom > 0:
+            total += 1.0 - abs(n1 - n2) / denom
+    return total / len(all_keys)
+
+
+def _make_combine_tversky(alpha: float, beta: float) -> Callable:
+    """Multiset Tversky on q-gram counts (mirrors :func:`lingo_tversky_similarity`)."""
+
+    def _combine(c1: Counter, c2: Counter) -> float:
+        if not c1 and not c2:
+            return 1.0
+        if not c1 or not c2:
+            return 0.0
+        intersection = only1 = only2 = 0
+        for k in set(c1) | set(c2):
+            a = c1.get(k, 0)
+            b = c2.get(k, 0)
+            intersection += min(a, b)
+            only1 += max(a - b, 0)
+            only2 += max(b - a, 0)
+        denom = intersection + alpha * only1 + beta * only2
+        return intersection / denom if denom else 0.0
+
+    return _combine
+
+
+def _make_lingo_batch(params: dict) -> Tuple[Callable, Callable]:
+    q = params.get("q", 4)
+
+    def featurize(s: str) -> Counter:
+        return get_lingos(s, q=q, normalize_rings=True, preprocess=False)
+
+    return featurize, _combine_lingo_sim
+
+
+def _make_tversky_batch(params: dict, alpha: Optional[float] = None, beta: Optional[float] = None) -> Tuple[Callable, Callable]:
+    q = params.get("q", 4)
+    a = alpha if alpha is not None else params.get("alpha", 0.9)
+    b = beta if beta is not None else params.get("beta", 0.1)
+
+    def featurize(s: str) -> Counter:
+        return get_lingos(s, q=q, normalize_rings=True, preprocess=False)
+
+    return featurize, _make_combine_tversky(a, b)
+
+
+def _make_spectrum_batch(params: dict) -> Tuple[Callable, Callable]:
+    k = params.get("k", 4)
+    coef = params.get("coefficient", "tanimoto").lower()
+
+    def featurize(s: str):
+        # Returns (string, kmer_counts_or_None, self_norm).  A string shorter
+        # than k has no k-mers; the string is kept so the degenerate branch can
+        # compare equality, exactly like spectrum_kernel_similarity.
+        if len(s) < k:
+            return (s, None, 0.0)
+        counts = Counter(s[i : i + k] for i in range(len(s) - k + 1))
+        norm = sum(c * c for c in counts.values())
+        return (s, counts, norm)
+
+    def combine(f1, f2) -> float:
+        s1, c1, n1 = f1
+        s2, c2, n2 = f2
+        if c1 is None and c2 is None:
+            return 1.0 if s1 == s2 else 0.0
+        if c1 is None or c2 is None:
+            return 0.0
+        # Inner product; iterate the smaller counter for speed (dot is exact).
+        small, large = (c1, c2) if len(c1) <= len(c2) else (c2, c1)
+        dot = 0.0
+        for kmer, cc in small.items():
+            other = large.get(kmer)
+            if other:
+                dot += cc * other
+        if n1 == 0 or n2 == 0:
+            return 0.0
+        if coef == "cosine":
+            return dot / (np.sqrt(n1) * np.sqrt(n2))
+        if coef == "tanimoto":
+            denom = n1 + n2 - dot
+            return dot / denom if denom > 0 else 0.0
+        if coef == "dice":
+            denom = n1 + n2
+            return 2.0 * dot / denom if denom > 0 else 0.0
+        raise ValueError(f"Unknown coefficient: '{coef}'. Supported: 'tanimoto', 'dice', 'cosine'.")
+
+    return featurize, combine
+
+
+def _make_substring_batch(params: dict) -> Tuple[Callable, Callable]:
+    min_length = params.get("min_length", 2)
+
+    def featurize(s: str):
+        freq = get_all_substrings(s, min_length)
+        kself = sum(v * v for v in freq.values())
+        return (freq, kself)
+
+    def combine(f1, f2) -> float:
+        freq1, k11 = f1
+        freq2, k22 = f2
+        if k11 == 0 or k22 == 0:
+            return 0.0
+        small, large = (freq1, freq2) if len(freq1) <= len(freq2) else (freq2, freq1)
+        k12 = 0
+        for sub, cc in small.items():
+            other = large.get(sub)
+            if other:
+                k12 += cc * other
+        return k12 / np.sqrt(k11 * k22)
+
+    return featurize, combine
+
+
+def _make_smifp_batch(chars: List[str], metric: str) -> Tuple[Callable, Callable]:
+    def featurize(s: str) -> np.ndarray:
+        return smiles_to_fingerprint(s, chars)
+
+    if metric == "tanimoto":
+
+        def combine(fp1: np.ndarray, fp2: np.ndarray) -> float:
+            dot = float(np.dot(fp1, fp2))
+            n1 = float(np.dot(fp1, fp1))
+            n2 = float(np.dot(fp2, fp2))
+            denom = n1 + n2 - dot
+            if denom == 0:
+                return 1.0 if n1 == 0 and n2 == 0 else 0.0
+            return dot / denom
+
+    else:  # cityblock (Manhattan L1); identical to scipy.spatial.distance.cityblock
+
+        def combine(fp1: np.ndarray, fp2: np.ndarray) -> float:
+            cbd = float(np.abs(fp1 - fp2).sum())
+            return 1.0 / (1.0 + cbd)
+
+    return featurize, combine
+
+
+def _make_ncd_batch(params: dict) -> Tuple[Callable, Callable]:
+    sep = b"|"
+
+    def featurize(s: str):
+        data = s.encode("utf-8")
+        return (s, data, _compress_bytes(data))
+
+    def combine(f1, f2) -> float:
+        s1, a, c_a = f1
+        s2, b, c_b = f2
+        if not s1 or not s2:
+            return 0.0
+        if s1 == s2:
+            return 1.0
+        c_ab = _compress_bytes(a + sep + b)
+        c_ba = _compress_bytes(b + sep + a)
+        c_xy = min(c_ab, c_ba)
+        denom = max(c_a, c_b)
+        if denom == 0:
+            return 1.0
+        ncd = (c_xy - min(c_a, c_b)) / denom
+        return max(0.0, min(1.0, 1.0 - ncd))
+
+    return featurize, combine
+
+
+def _make_subsequence_batch(params: dict) -> Tuple[Callable, Callable]:
+    n = params.get("n", 3)
+    lam = params.get("lam", 0.5)
+
+    def featurize(s: str):
+        # Cache the self-kernel K_n(s,s) once per string; the cross-kernel is
+        # still computed per pair.  None marks a string shorter than n.
+        if len(s) < n:
+            return (s, None)
+        return (s, _subsequence_kernel_raw(s, s, n, lam))
+
+    def combine(f1, f2) -> float:
+        s1, kself1 = f1
+        s2, kself2 = f2
+        if kself1 is None and kself2 is None:
+            return 1.0 if s1 == s2 else 0.0
+        if kself1 is None or kself2 is None:
+            return 0.0
+        if kself1 <= 0.0 or kself2 <= 0.0:
+            return 0.0
+        k12 = _subsequence_kernel_raw(s1, s2, n, lam)
+        return k12 / np.sqrt(kself1 * kself2)
+
+    return featurize, combine
+
+
+# method name -> builder(params) -> (featurize, combine)
+BATCH_FEATURIZERS: Dict[str, Callable[[dict], Tuple[Callable, Callable]]] = {
+    "lingo": _make_lingo_batch,
+    "lingo3": _make_lingo_batch,
+    "lingo5": _make_lingo_batch,
+    "lingo_tversky": _make_tversky_batch,
+    "lingo_tversky_sym": lambda p: _make_tversky_batch(p, alpha=0.5, beta=0.5),
+    "lingo_dice": lambda p: _make_tversky_batch(p, alpha=0.5, beta=0.5),
+    "lingo_ruzicka": lambda p: _make_tversky_batch(p, alpha=1.0, beta=1.0),
+    "spectrum": _make_spectrum_batch,
+    "spectrum3": _make_spectrum_batch,
+    "spectrum5": _make_spectrum_batch,
+    "spectrum_cosine": _make_spectrum_batch,
+    "substring": _make_substring_batch,
+    "subsequence": _make_subsequence_batch,
+    "subsequence2": _make_subsequence_batch,
+    "subsequence4": _make_subsequence_batch,
+    "smifp_tanimoto": lambda p: _make_smifp_batch(SMIFP_CHARS_34, "tanimoto"),
+    "smifp38_tanimoto": lambda p: _make_smifp_batch(SMIFP_CHARS_38, "tanimoto"),
+    "smifp_cbd": lambda p: _make_smifp_batch(SMIFP_CHARS_34, "cityblock"),
+    "smifp38_cbd": lambda p: _make_smifp_batch(SMIFP_CHARS_38, "cityblock"),
+    "ncd": _make_ncd_batch,
+}
+
+# User kwargs that legitimately override a method's feature parameters.
+_BATCH_PARAM_KEYS = ("q", "k", "coefficient", "alpha", "beta", "min_length", "n", "lam")
+
+
+def _resolve_batch_featurizer(method: str, kwargs: dict) -> Optional[Tuple[Callable, Callable]]:
+    """
+    Return ``(featurize, combine)`` for *method* if it supports the
+    featurize-once fast path, else ``None``.
+
+    Feature parameters come from the method's registry ``params`` entry,
+    overlaid with any matching user kwargs so that explicit overrides
+    (e.g. ``q=5``) are honoured exactly as the per-pair path would.
+    """
+    builder = BATCH_FEATURIZERS.get(method)
+    if builder is None:
+        return None
+    params = dict(AVAILABLE_METHODS.get(method, {}).get("params", {}))
+    for key in _BATCH_PARAM_KEYS:
+        if key in kwargs:
+            params[key] = kwargs[key]
+    return builder(params)
+
+
+def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", symmetric: Optional[bool] = None, **kwargs) -> np.ndarray:
+=======
 def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", **kwargs) -> np.ndarray:
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
     """
     Compute pairwise similarity matrix for a list of SMILES.
 
@@ -3416,6 +4136,12 @@ def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", **k
         List of SMILES strings
     method : str
         Similarity method name
+    symmetric : bool or None
+        Whether ``sim(a, b) == sim(b, a)`` for this method.  When ``None``
+        (default) it is inferred with :func:`is_symmetric_method`.  For a
+        symmetric method only the upper triangle is computed and mirrored;
+        for an asymmetric method (e.g. query-weighted ``lingo_tversky``)
+        both off-diagonal cells are computed independently.
     **kwargs : dict
         Additional arguments for the similarity function.  ``preprocess``
         is passed through only to functions whose signature accepts it;
@@ -3432,16 +4158,43 @@ def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", **k
     n = len(smiles_list)
     sim_matrix = np.zeros((n, n))
 
+<<<<<<< HEAD
+    if symmetric is None:
+        symmetric = is_symmetric_method(method, kwargs)
+
+    sim_func = get_similarity_function(method)  # also enforces optional-dependency checks
+    smiles_list = list(smiles_list)
+=======
     sim_func = get_similarity_function(method)
     smiles_list = list(smiles_list)
     filtered_kwargs, smiles_list = _build_batch_kwargs(sim_func, method, smiles_list, kwargs)
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
+    # Fast path: featurize each string once, then only combine per pair.  The
+    # featurizer owns its normalization (preprocess each string once here), so
+    # it does not depend on _build_batch_kwargs mutating the corpus.
+    batch = _resolve_batch_featurizer(method, kwargs)
+    if batch is not None:
+        featurize, combine = batch
+        prep = preprocess_smiles if kwargs.get("preprocess", True) else (lambda x: x)
+        feats = [featurize(prep(s)) for s in smiles_list]
+        for i in range(n):
+            sim_matrix[i, i] = 1.0  # Self-similarity
+            for j in range(i + 1, n):
+                sim_matrix[i, j] = combine(feats[i], feats[j])
+                sim_matrix[j, i] = sim_matrix[i, j] if symmetric else combine(feats[j], feats[i])
+        return sim_matrix
+
+    # General path: per-pair evaluation, corpus preprocessed once up front.
+    filtered_kwargs, smiles_list = _build_batch_kwargs(sim_func, method, smiles_list, kwargs)
     for i in range(n):
         sim_matrix[i, i] = 1.0  # Self-similarity
         for j in range(i + 1, n):
-            sim = sim_func(smiles_list[i], smiles_list[j], **filtered_kwargs)
-            sim_matrix[i, j] = sim
-            sim_matrix[j, i] = sim
+            sim_matrix[i, j] = sim_func(smiles_list[i], smiles_list[j], **filtered_kwargs)
+            if symmetric:
+                sim_matrix[j, i] = sim_matrix[i, j]
+            else:
+                sim_matrix[j, i] = sim_func(smiles_list[j], smiles_list[i], **filtered_kwargs)
 
     return sim_matrix
 
@@ -3475,12 +4228,40 @@ def compute_cross_similarity_matrix(templates: List[str], library: List[str], me
     n_templates = len(templates)
     sim_matrix = np.zeros((n_lib, n_templates))
 
+<<<<<<< HEAD
+    sim_func = get_similarity_function(method)  # also enforces optional-dependency checks
+    templates = list(templates)
+    library = list(library)
+
+    # Fast path: featurize each template and library string exactly once (the
+    # whole point — avoid re-deriving library features once per template and
+    # vice versa).  The featurizer owns its normalization here.
+    batch = _resolve_batch_featurizer(method, kwargs)
+    if batch is not None:
+        featurize, combine = batch
+        prep = preprocess_smiles if kwargs.get("preprocess", True) else (lambda x: x)
+        tfeats = [featurize(prep(t)) for t in templates]
+        lfeats = [featurize(prep(lib)) for lib in library]
+        for i in range(n_lib):
+            lf = lfeats[i]
+            for j in range(n_templates):
+                # Argument order matches sim_func(lib, template): for asymmetric
+                # methods (query-weighted Tversky) the library molecule is the query.
+                sim_matrix[i, j] = combine(lf, tfeats[j])
+        return sim_matrix
+=======
     sim_func = get_similarity_function(method)
     corpus = list(templates) + list(library)
     filtered_kwargs, corpus = _build_batch_kwargs(sim_func, method, corpus, kwargs)
     templates = corpus[:n_templates]
     library = corpus[n_templates:]
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
+    # General path: per-pair evaluation, corpus preprocessed once up front.
+    corpus = templates + library
+    filtered_kwargs, corpus = _build_batch_kwargs(sim_func, method, corpus, kwargs)
+    templates = corpus[:n_templates]
+    library = corpus[n_templates:]
     for i, lib_smiles in enumerate(library):
         for j, template_smiles in enumerate(templates):
             sim = sim_func(lib_smiles, template_smiles, **filtered_kwargs)
@@ -3584,17 +4365,13 @@ def read_smiles_from_file(
             delimiter = None  # Will use split() for any whitespace
 
     # Default header behavior based on extension
+    # .smi/.smiles files carry no header; column defaults are the same either way.
     if ext in [".smi", ".smiles"]:
         header = False
-        if smiles_col is None:
-            smiles_col = 0
-        if name_col is None:
-            name_col = 1
-    else:
-        if smiles_col is None:
-            smiles_col = 0
-        if name_col is None:
-            name_col = 1
+    if smiles_col is None:
+        smiles_col = 0
+    if name_col is None:
+        name_col = 1
 
     molecules = {}
 
@@ -3850,9 +4627,14 @@ Input formats:
 
 Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
                    smifp38_cbd, smifp38_tanimoto, lingo, lingo3, lingo5,
-                   lingo_tversky, lingo_tversky_sym, lingo_dice,
+                   lingo_tversky, lingo_tversky_sym, lingo_dice, lingo_ruzicka,
                    spectrum, spectrum3, spectrum5, spectrum_cosine,
+<<<<<<< HEAD
+                   mismatch, mismatch3, mismatch5, lcs_substring, token_edit,
+                   subsequence, subsequence2, subsequence4,
+=======
                    mismatch, mismatch3, mismatch5, lcs_substring,
+>>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
                    tok-smiles_tfidf, tok-smiles_tfidf{m}{n} (m=1..6, n=m..6, e.g. tok-smiles_tfidf44),
                    tok-schwaller_tfidf, tok-schwaller_tfidf{m}{n} (m=1..6, n=m..6, e.g. tok-schwaller_tfidf44),
                    tok-bpe_tfidf, tok-bpe_tfidf{m}{n} (m=1..6, n=m..6, e.g. tok-bpe_tfidf44),
