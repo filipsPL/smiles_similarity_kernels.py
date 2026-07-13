@@ -23,7 +23,8 @@ import smiles_similarity_kernels as m
 
 EXAMPLES_DIR = Path(__file__).parent / "examples"
 TEMPLATES_SMI = EXAMPLES_DIR / "templates.smi"
-DATABASE_SMI  = EXAMPLES_DIR / "database.smi"
+DATABASE_SMI = EXAMPLES_DIR / "database.smi"
+
 
 def approx(value, rel=1e-4):
     """pytest.approx wrapper with a consistent relative tolerance."""
@@ -33,6 +34,7 @@ def approx(value, rel=1e-4):
 # ---------------------------------------------------------------------------
 # 1. Preprocessing
 # ---------------------------------------------------------------------------
+
 
 class TestPreprocessSmiles:
     def test_chlorine(self):
@@ -48,9 +50,9 @@ class TestPreprocessSmiles:
         result = m.preprocess_smiles("C[C@@H](Cl)Br")
         # @@ must be replaced as a unit before any bare @ could be touched
         assert "@@" not in result
-        assert "¡" in result   # @@ → ¡
-        assert "L" in result   # Cl → L
-        assert "R" in result   # Br → R
+        assert "¡" in result  # @@ → ¡
+        assert "L" in result  # Cl → L
+        assert "R" in result  # Br → R
 
     def test_silicon(self):
         assert m.preprocess_smiles("[Si]") == "[G]"
@@ -74,7 +76,7 @@ class TestPreprocessSmiles:
         # @TH1 must not be split into @  +  TH1
         result = m.preprocess_smiles("[C@TH1]")
         assert "@TH1" not in result
-        assert "¢" in result   # @TH1 → ¢
+        assert "¢" in result  # @TH1 → ¢
 
 
 class TestNormalizeRingNumbers:
@@ -111,9 +113,7 @@ class TestShuffleSmiles:
     def test_actually_permutes(self):
         # Must not be a no-op: for a string with enough distinct characters,
         # at least one seed among a handful must move something.
-        assert any(
-            m.shuffle_smiles(self.ASPIRIN, seed=s) != self.ASPIRIN for s in range(10)
-        )
+        assert any(m.shuffle_smiles(self.ASPIRIN, seed=s) != self.ASPIRIN for s in range(10))
 
     def test_single_char_unchanged(self):
         assert m.shuffle_smiles("C", seed=1) == "C"
@@ -155,9 +155,7 @@ class TestSortString:
 # 2. Canonicalization and InChI  (skip when RDKit absent)
 # ---------------------------------------------------------------------------
 
-rdkit_available = pytest.mark.skipif(
-    not m.RDKIT_AVAILABLE, reason="RDKit not installed"
-)
+rdkit_available = pytest.mark.skipif(not m.RDKIT_AVAILABLE, reason="RDKit not installed")
 
 
 @rdkit_available
@@ -204,14 +202,10 @@ _ASPIRIN_INCHI = "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,
 
 class TestPreprocessInchi:
     def test_strips_prefix_and_version(self):
-        assert m.preprocess_inchi(_ASPIRIN_INCHI) == (
-            "C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)"
-        )
+        assert m.preprocess_inchi(_ASPIRIN_INCHI) == ("C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)")
 
     def test_keep_version(self):
-        assert m.preprocess_inchi(_ASPIRIN_INCHI, strip_version=False) == (
-            "1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)"
-        )
+        assert m.preprocess_inchi(_ASPIRIN_INCHI, strip_version=False) == ("1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)")
 
     def test_idempotent(self):
         once = m.preprocess_inchi(_ASPIRIN_INCHI)
@@ -227,9 +221,7 @@ class TestExtractInchiLayers:
         assert m.extract_inchi_layers(_ASPIRIN_INCHI, "formula") == "C9H8O4"
 
     def test_connections(self):
-        assert m.extract_inchi_layers(_ASPIRIN_INCHI, "connections") == (
-            "c1-6(10)13-8-5-3-2-4-7(8)9(11)12"
-        )
+        assert m.extract_inchi_layers(_ASPIRIN_INCHI, "connections") == ("c1-6(10)13-8-5-3-2-4-7(8)9(11)12")
 
     def test_hydrogens(self):
         assert m.extract_inchi_layers(_ASPIRIN_INCHI, "hydrogens") == "h2-5H,1H3,(H,11,12)"
@@ -249,9 +241,7 @@ class TestExtractInchiLayers:
         assert m.extract_inchi_layers(_ASPIRIN_INCHI, ["formula", "stereo_tet"]) == "C9H8O4"
 
     def test_all_equals_preprocess_inchi(self):
-        assert m.extract_inchi_layers(_ASPIRIN_INCHI, "all") == m.preprocess_inchi(
-            _ASPIRIN_INCHI, strip_version=True
-        )
+        assert m.extract_inchi_layers(_ASPIRIN_INCHI, "all") == m.preprocess_inchi(_ASPIRIN_INCHI, strip_version=True)
 
     def test_unknown_layer_raises(self):
         with pytest.raises(ValueError):
@@ -272,9 +262,7 @@ class TestSmilesToInchiLayers:
         # match calling extract_inchi_layers directly on smiles_to_inchi's output.
         smiles = "CC(=O)Oc1ccccc1C(=O)O"  # aspirin
         full_inchi = m.smiles_to_inchi(smiles)
-        assert m.smiles_to_inchi_layers(smiles, "connections") == m.extract_inchi_layers(
-            full_inchi, "connections"
-        )
+        assert m.smiles_to_inchi_layers(smiles, "connections") == m.extract_inchi_layers(full_inchi, "connections")
 
     def test_default_all_matches_preprocessed_full_inchi(self):
         smiles = "CCO"
@@ -292,6 +280,7 @@ class TestSmilesToInchiLayers:
 # 3. Edit distance similarity
 # ---------------------------------------------------------------------------
 
+
 class TestEditSimilarity:
     def test_identical(self):
         assert m.edit_similarity("CCO", "CCO") == approx(1.0)
@@ -308,14 +297,13 @@ class TestEditSimilarity:
         assert 0.0 <= s <= 1.0
 
     def test_symmetry(self):
-        assert m.edit_similarity("CCO", "CCOC") == approx(
-            m.edit_similarity("CCOC", "CCO")
-        )
+        assert m.edit_similarity("CCO", "CCOC") == approx(m.edit_similarity("CCOC", "CCO"))
 
 
 # ---------------------------------------------------------------------------
 # 4. NLCS similarity
 # ---------------------------------------------------------------------------
+
 
 class TestNlcsSimilarity:
     def test_identical(self):
@@ -323,7 +311,7 @@ class TestNlcsSimilarity:
 
     def test_known_value(self):
         # LCS("ABC","AC") = 2, NLCS = 4/(3*2) = 0.6667
-        assert m.nlcs_similarity("ABC", "AC", preprocess=False) == approx(2**2 / (3*2))
+        assert m.nlcs_similarity("ABC", "AC", preprocess=False) == approx(2**2 / (3 * 2))
 
     def test_no_common(self):
         # No common characters → LCS = 0 → similarity = 0
@@ -334,14 +322,13 @@ class TestNlcsSimilarity:
         assert 0.0 <= s <= 1.0
 
     def test_symmetry(self):
-        assert m.nlcs_similarity("CCO", "CCOC") == approx(
-            m.nlcs_similarity("CCOC", "CCO")
-        )
+        assert m.nlcs_similarity("CCO", "CCOC") == approx(m.nlcs_similarity("CCOC", "CCO"))
 
 
 # ---------------------------------------------------------------------------
 # 5. CLCS similarity
 # ---------------------------------------------------------------------------
+
 
 class TestClcsSimilarity:
     def test_identical(self):
@@ -364,9 +351,7 @@ class TestClcsSimilarity:
         # (not just "some value in range") -- verifies the weighted-sum formula
         # itself, not merely its output bounds.
         for a, b in [("CCO", "CCN"), ("ABCDEF", "ACDF"), ("CC(=O)O", "CCN")]:
-            assert m.clcs_similarity(a, b, w1=1.0, w2=0.0, w3=0.0) == approx(
-                m.nlcs_similarity(a, b)
-            )
+            assert m.clcs_similarity(a, b, w1=1.0, w2=0.0, w3=0.0) == approx(m.nlcs_similarity(a, b))
 
     def test_weight_sum_not_one_warns(self):
         with pytest.warns(UserWarning, match="not 1"):
@@ -376,6 +361,7 @@ class TestClcsSimilarity:
 # ---------------------------------------------------------------------------
 # 6. Substring kernel
 # ---------------------------------------------------------------------------
+
 
 class TestSubstringKernelSimilarity:
     def test_identical(self):
@@ -394,14 +380,13 @@ class TestSubstringKernelSimilarity:
         assert s == approx(0.0)
 
     def test_symmetry(self):
-        assert m.substring_kernel_similarity("CCO", "CCOC") == approx(
-            m.substring_kernel_similarity("CCOC", "CCO")
-        )
+        assert m.substring_kernel_similarity("CCO", "CCOC") == approx(m.substring_kernel_similarity("CCOC", "CCO"))
 
 
 # ---------------------------------------------------------------------------
 # 7. SMIfp similarities
 # ---------------------------------------------------------------------------
+
 
 class TestSmifpSimilarities:
     def test_tanimoto_identical(self):
@@ -447,35 +432,24 @@ class TestSmifpSimilarities:
         assert 0.0 <= s <= 1.0
 
     def test_preprocessing_effect(self):
-<<<<<<< HEAD
         # s1 raw contains 'Cl' as two chars ('C','l'); preprocessing collapses it
         # to the single sentinel 'L', which equals s2 as-is.  So preprocess=True
         # must make the two strings' fingerprints identical (sim_pre == 1.0),
         # while preprocess=False leaves the raw 'l' distinct from 'L' (sim_no_pre != 1.0).
-=======
-        # Test that preprocessing affects results for multi-char elements
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
         s1 = "CCCCl"  # Contains 'Cl' (2 chars)
-        s2 = "CCCL"   # What it becomes after preprocessing
+        s2 = "CCCL"  # What it becomes after preprocessing
         sim_pre = m.smifp_similarity_tanimoto(s1, s2, preprocess=True)
         sim_no_pre = m.smifp_similarity_tanimoto(s1, s2, preprocess=False)
-<<<<<<< HEAD
         assert 0.0 <= sim_pre <= 1.0
         assert 0.0 <= sim_no_pre <= 1.0
         assert sim_pre == approx(1.0)
         assert sim_pre != approx(sim_no_pre)
-=======
-        # Should be different if preprocessing works correctly
-        assert 0.0 <= sim_pre <= 1.0
-        assert 0.0 <= sim_no_pre <= 1.0
-        # FIXME: Currently fails due to implementation bug - preprocessing is ignored
-        # assert sim_pre != sim_no_pre or sim_pre == 1.0
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
 
 # ---------------------------------------------------------------------------
 # 7b. Spectrum Kernel Similarity
 # ---------------------------------------------------------------------------
+
 
 class TestSpectrumKernelSimilarity:
     def test_identical(self):
@@ -500,11 +474,8 @@ class TestSpectrumKernelSimilarity:
         assert 0.0 <= s_k5 <= 1.0
 
     def test_symmetry(self):
-        assert m.spectrum_kernel_similarity("CCO", "CCOC") == approx(
-            m.spectrum_kernel_similarity("CCOC", "CCO")
-        )
+        assert m.spectrum_kernel_similarity("CCO", "CCOC") == approx(m.spectrum_kernel_similarity("CCOC", "CCO"))
 
-<<<<<<< HEAD
     def test_known_value(self):
         # s1="AABB" bigrams: AA:1, AB:1, BB:1 (norm1=3)
         # s2="ABBB" bigrams: AB:1, BB:2           (norm2=5)
@@ -513,7 +484,7 @@ class TestSpectrumKernelSimilarity:
         s1, s2 = "AABB", "ABBB"
         assert m.spectrum_kernel_similarity(s1, s2, k=2, coefficient="tanimoto", preprocess=False) == approx(0.6)
         assert m.spectrum_kernel_similarity(s1, s2, k=2, coefficient="dice", preprocess=False) == approx(0.75)
-        assert m.spectrum_kernel_similarity(s1, s2, k=2, coefficient="cosine", preprocess=False) == approx(3 / (15 ** 0.5))
+        assert m.spectrum_kernel_similarity(s1, s2, k=2, coefficient="cosine", preprocess=False) == approx(3 / (15**0.5))
 
     def test_unknown_coefficient_raises(self):
         # Strings must be >= k so the coefficient branch is actually reached
@@ -521,12 +492,11 @@ class TestSpectrumKernelSimilarity:
         with pytest.raises(ValueError):
             m.spectrum_kernel_similarity("CCCCCCCC", "CCCCCCCN", coefficient="bogus")
 
-=======
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
 # ---------------------------------------------------------------------------
 # 7c. Mismatch Kernel Similarity
 # ---------------------------------------------------------------------------
+
 
 class TestMismatchKernelSimilarity:
     def test_identical(self):
@@ -551,21 +521,16 @@ class TestMismatchKernelSimilarity:
         assert s_m0 == m.spectrum_kernel_similarity("CCCCN", "CCCCO", k=4)
         assert 0.0 <= s_m1 <= 1.0
 
-<<<<<<< HEAD
     def test_known_value(self):
         # Independently verified against a brute-force reimplementation of the
         # mismatch-kernel definition (exhaustive Hamming-ball expansion over the
         # alphabet) -- see insights-opus48.md test-audit notes.
         s1, s2, alphabet = "AABCAB", "ABCBAC", "ABC"
-        assert m.mismatch_kernel_similarity(
-            s1, s2, k=2, m=1, coefficient="tanimoto", preprocess=False, alphabet=alphabet
-        ) == approx(0.875)
-        assert m.mismatch_kernel_similarity(
-            s1, s2, k=2, m=1, coefficient="dice", preprocess=False, alphabet=alphabet
-        ) == approx(0.933333, rel=1e-5)
-        assert m.mismatch_kernel_similarity(
-            s1, s2, k=3, m=1, coefficient="tanimoto", preprocess=False, alphabet=alphabet
-        ) == approx(0.625)
+        assert m.mismatch_kernel_similarity(s1, s2, k=2, m=1, coefficient="tanimoto", preprocess=False, alphabet=alphabet) == approx(0.875)
+        assert m.mismatch_kernel_similarity(s1, s2, k=2, m=1, coefficient="dice", preprocess=False, alphabet=alphabet) == approx(
+            0.933333, rel=1e-5
+        )
+        assert m.mismatch_kernel_similarity(s1, s2, k=3, m=1, coefficient="tanimoto", preprocess=False, alphabet=alphabet) == approx(0.625)
 
     def test_negative_m_raises(self):
         with pytest.raises(ValueError):
@@ -578,17 +543,14 @@ class TestMismatchKernelSimilarity:
         with pytest.raises(ValueError):
             m.mismatch_kernel_similarity("CCCCCCCC", "CCCCCCCN", k=4, m=1, coefficient="bogus")
 
-=======
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
     def test_symmetry(self):
-        assert m.mismatch_kernel_similarity("CCO", "CCOC") == approx(
-            m.mismatch_kernel_similarity("CCOC", "CCO")
-        )
+        assert m.mismatch_kernel_similarity("CCO", "CCOC") == approx(m.mismatch_kernel_similarity("CCOC", "CCO"))
 
 
 # ---------------------------------------------------------------------------
 # 7d. Longest Common Substring Similarity
 # ---------------------------------------------------------------------------
+
 
 class TestLongestCommonSubstringSimilarity:
     def test_identical(self):
@@ -601,17 +563,14 @@ class TestLongestCommonSubstringSimilarity:
     def test_known_value(self):
         # LCS of "ABCDEF" and "CDEFXY" is "CDEF" (4 chars)
         # Similarity = (4^2) / (6*6) = 16/36 ≈ 0.444
-        assert m.longest_common_substring_similarity("ABCDEF", "CDEFXY", preprocess=False) == approx(16/36)
+        assert m.longest_common_substring_similarity("ABCDEF", "CDEFXY", preprocess=False) == approx(16 / 36)
 
     def test_no_common(self):
         assert m.longest_common_substring_similarity("ABC", "XYZ", preprocess=False) == approx(0.0)
 
     def test_symmetry(self):
-        assert m.longest_common_substring_similarity("CCO", "CCOC") == approx(
-            m.longest_common_substring_similarity("CCOC", "CCO")
-        )
+        assert m.longest_common_substring_similarity("CCO", "CCOC") == approx(m.longest_common_substring_similarity("CCOC", "CCO"))
 
-<<<<<<< HEAD
 
 class TestSubsequenceKernel:
     @staticmethod
@@ -637,9 +596,7 @@ class TestSubsequenceKernel:
             for t in cases:
                 for n in (1, 2, 3):
                     for lam in (0.3, 0.5, 1.0):
-                        assert m._subsequence_kernel_raw(s, t, n, lam) == pytest.approx(
-                            self._brute_raw(s, t, n, lam), abs=1e-12
-                        )
+                        assert m._subsequence_kernel_raw(s, t, n, lam) == pytest.approx(self._brute_raw(s, t, n, lam), abs=1e-12)
 
     def test_identical(self):
         assert m.subsequence_kernel_similarity("CC(=O)Oc1ccccc1", "CC(=O)Oc1ccccc1") == approx(1.0)
@@ -662,14 +619,14 @@ class TestSubsequenceKernel:
     def test_gap_decay(self):
         # Smaller lambda penalises gapped matches more, so a molecule whose only
         # shared length-3 subsequence spans a gap scores lower at small lambda.
-        a, b = "CXYZO", "CO"   # share subsequence "CO" but not length-3; use n=2
+        a, b = "CXYZO", "CO"  # share subsequence "CO" but not length-3; use n=2
         hi = m.subsequence_kernel_similarity("CABO", "CO", n=2, lam=0.9, preprocess=False)
         lo = m.subsequence_kernel_similarity("CABO", "CO", n=2, lam=0.3, preprocess=False)
         assert lo < hi  # more gap penalty at small lambda
 
     def test_short_strings(self):
-        assert m.subsequence_kernel_similarity("CC", "CC", n=3) == approx(1.0)   # both < n, equal
-        assert m.subsequence_kernel_similarity("CC", "OO", n=3) == approx(0.0)   # both < n, differ
+        assert m.subsequence_kernel_similarity("CC", "CC", n=3) == approx(1.0)  # both < n, equal
+        assert m.subsequence_kernel_similarity("CC", "OO", n=3) == approx(0.0)  # both < n, differ
         assert m.subsequence_kernel_similarity("CC", "CCCCO", n=3) == approx(0.0)  # one < n
 
     def test_registered_and_fast_path(self):
@@ -696,9 +653,7 @@ class TestTokenEditSimilarity:
         assert 0.0 <= s <= 1.0
 
     def test_symmetry(self):
-        assert m.token_edit_similarity("[nH+]c1ccccc1", "[nH]c1ccncc1") == approx(
-            m.token_edit_similarity("[nH]c1ccncc1", "[nH+]c1ccccc1")
-        )
+        assert m.token_edit_similarity("[nH+]c1ccccc1", "[nH]c1ccncc1") == approx(m.token_edit_similarity("[nH]c1ccncc1", "[nH+]c1ccccc1"))
 
     def test_empty_both(self):
         assert m.token_edit_similarity("", "") == approx(1.0)
@@ -730,12 +685,11 @@ class TestTokenEditSimilarity:
         fn = m.get_similarity_function("token_edit")
         assert fn("CCO", "CCO") == approx(1.0)
 
-=======
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
 # ---------------------------------------------------------------------------
 # 8. LINGO similarity
 # ---------------------------------------------------------------------------
+
 
 class TestLingoSimilarity:
     def test_identical(self):
@@ -762,16 +716,14 @@ class TestLingoSimilarity:
         assert 0.0 <= s <= 1.0
 
     def test_symmetry(self):
-        assert m.lingo_similarity("CCO", "CCOC") == approx(
-            m.lingo_similarity("CCOC", "CCO")
-        )
+        assert m.lingo_similarity("CCO", "CCOC") == approx(m.lingo_similarity("CCOC", "CCO"))
 
     def test_validated_against_example_output(self):
         """
         Validates against examples/results.csv produced by the CLI.
         Template 0054-0090 vs 0133-0086 must be 0.39080.
         """
-        t1 = "CC(=O)C1=CC=C(Br)C(N)=C1"           # 0054-0090
+        t1 = "CC(=O)C1=CC=C(Br)C(N)=C1"  # 0054-0090
         t2 = "NC1=CC=C(Br)C=C1C(=O)C1=CC=CC=C1Cl"  # 0133-0086
         assert m.lingo_similarity(t1, t2) == approx(0.39080, rel=1e-3)
 
@@ -783,8 +735,7 @@ class TestLingoSimilarity:
 
 
 class TestLingoRuzickaSimilarity:
-    PAIRS = [("CCO", "CCCO"), ("c1ccccc1CCCCCCCCCC", "c1ccccc1CC"),
-             ("CC(=O)Oc1ccccc1C(=O)O", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C")]
+    PAIRS = [("CCO", "CCCO"), ("c1ccccc1CCCCCCCCCC", "c1ccccc1CC"), ("CC(=O)Oc1ccccc1C(=O)O", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C")]
 
     def test_identical(self):
         assert m.lingo_ruzicka_similarity("CC(=O)Oc1ccccc1", "CC(=O)Oc1ccccc1") == approx(1.0)
@@ -808,9 +759,7 @@ class TestLingoRuzickaSimilarity:
 
     def test_equals_tversky_alpha_beta_one(self):
         for a, b in self.PAIRS:
-            assert m.lingo_ruzicka_similarity(a, b) == approx(
-                m.lingo_tversky_similarity(a, b, q=4, alpha=1.0, beta=1.0)
-            )
+            assert m.lingo_ruzicka_similarity(a, b) == approx(m.lingo_tversky_similarity(a, b, q=4, alpha=1.0, beta=1.0))
 
     def test_distinct_from_dice(self):
         # On a pair with repeated q-grams the two coefficients must differ.
@@ -835,6 +784,7 @@ class TestLingoRuzickaSimilarity:
 # ---------------------------------------------------------------------------
 # 9. LINGO TF-IDF
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="scikit-learn not installed")
 class TestLingoTfidfSimilarity:
@@ -867,14 +817,20 @@ class TestLingoTfidfSimilarity:
 # 10. SMILES TF-IDF (chemical tokenization)
 # ---------------------------------------------------------------------------
 
+
 class TestTfidfSharedHelper:
     """The four *_tfidf functions delegate to one helper; each must still name
     itself in the ImportError raised when scikit-learn is unavailable."""
 
-    @pytest.mark.parametrize("fn_name", [
-        "smiles_tfidf_similarity", "schwaller_tfidf_similarity",
-        "bpe_tfidf_similarity", "selfies_tfidf_similarity",
-    ])
+    @pytest.mark.parametrize(
+        "fn_name",
+        [
+            "smiles_tfidf_similarity",
+            "schwaller_tfidf_similarity",
+            "bpe_tfidf_similarity",
+            "selfies_tfidf_similarity",
+        ],
+    )
     def test_importerror_names_caller(self, fn_name, monkeypatch):
         monkeypatch.setattr(m, "SKLEARN_AVAILABLE", False)
         with pytest.raises(ImportError) as exc:
@@ -907,10 +863,11 @@ class TestSmilesTfidfSimilarity:
         # See TestLingoTfidfSimilarity.test_vectorizer_reuse_uses_prefitted_idf
         # for why "call the same args twice" is a tautology here.
         from sklearn.feature_extraction.text import TfidfVectorizer
+
         tok = m.SMILESTokenizer()
-        vec = TfidfVectorizer(tokenizer=tok, analyzer="word", lowercase=False,
-                              token_pattern=None, ngram_range=(1, 2), min_df=1,
-                              sublinear_tf=True)
+        vec = TfidfVectorizer(
+            tokenizer=tok, analyzer="word", lowercase=False, token_pattern=None, ngram_range=(1, 2), min_df=1, sublinear_tf=True
+        )
         vec.fit(["CCO", "CCOC", "c1ccccc1Cl", "CCN", "CCCCCC"])
         s_prefitted = m.smiles_tfidf_similarity("CCO", "CCOC", vectorizer=vec)
         s_default = m.smiles_tfidf_similarity("CCO", "CCOC")  # corpus defaults to [a, b]
@@ -995,10 +952,10 @@ class TestSchwallerTfidfSimilarity:
     def test_differs_from_smiles_tfidf(self):
         # bracket atom [nH] should be one token in Schwaller, two in original
         s_schwaller = m.schwaller_tfidf_similarity("c1cc[nH]cc1", "c1ccncc1")
-        s_original  = m.smiles_tfidf_similarity("c1cc[nH]cc1", "c1ccncc1")
+        s_original = m.smiles_tfidf_similarity("c1cc[nH]cc1", "c1ccncc1")
         # scores may differ; both valid
         assert 0.0 <= s_schwaller <= 1.0
-        assert 0.0 <= s_original  <= 1.0
+        assert 0.0 <= s_original <= 1.0
 
 
 BPE_VOCAB = Path(__file__).parent / "smiles_bpe_vocab.json"
@@ -1008,6 +965,7 @@ bpe_vocab_available = pytest.mark.skipif(not BPE_VOCAB.exists(), reason="BPE voc
 class TestSMILESTokenizerBPE:
     def test_no_vocab_raises(self):
         import tempfile, os
+
         with pytest.raises(FileNotFoundError):
             m.SMILESTokenizerBPE(vocab_path="/nonexistent/path/vocab.json")
 
@@ -1019,8 +977,8 @@ class TestSMILESTokenizerBPE:
     @bpe_vocab_available
     def test_num_merges_slices(self):
         tok_all = m.SMILESTokenizerBPE()
-        tok_16  = m.SMILESTokenizerBPE(num_merges=16)
-        tok_0   = m.SMILESTokenizerBPE(num_merges=0)
+        tok_16 = m.SMILESTokenizerBPE(num_merges=16)
+        tok_0 = m.SMILESTokenizerBPE(num_merges=0)
         assert len(tok_16._merges) == 16
         assert len(tok_0._merges) == 0
         assert len(tok_16._merges) <= len(tok_all._merges)
@@ -1029,7 +987,7 @@ class TestSMILESTokenizerBPE:
     def test_num_merges_coarser_tokenization(self):
         # More merges → fewer, longer tokens
         smi = "CC(=O)Nc1ccccc1"
-        tok_fine   = m.SMILESTokenizerBPE(num_merges=16)
+        tok_fine = m.SMILESTokenizerBPE(num_merges=16)
         tok_coarse = m.SMILESTokenizerBPE(num_merges=512)
         assert len(tok_fine.tokenize(smi)) >= len(tok_coarse.tokenize(smi))
 
@@ -1110,9 +1068,7 @@ class TestBpeTfidfSimilarity:
 # 10c. SELFIES TF-IDF Similarity
 # ---------------------------------------------------------------------------
 
-selfies_available = pytest.mark.skipif(
-    not m.SELFIES_AVAILABLE, reason="selfies not installed"
-)
+selfies_available = pytest.mark.skipif(not m.SELFIES_AVAILABLE, reason="selfies not installed")
 
 
 @selfies_available
@@ -1129,41 +1085,26 @@ class TestSelfiesTfidfSimilarity:
         s = m.selfies_tfidf_similarity("[C][C][O]", "[C][C][N]", ngram_range=(2, 3))
         assert 0.0 <= s <= 1.0
 
-<<<<<<< HEAD
     def test_vectorizer_reuse_uses_prefitted_idf(self):
         # See TestLingoTfidfSimilarity.test_vectorizer_reuse_uses_prefitted_idf
         # for why "call the same args twice" is a tautology here.
         a, b = "[C][C][O]", "[C][C][N]"
         wide_corpus = ["[C][C][O]", "[C][C][N]", "[C][C][S]", "[C][O][C]", "[N][C][C]"]
-        vec = m.TfidfVectorizer(tokenizer=m.SELFIESTokenizer(), analyzer="word", lowercase=False,
-                                token_pattern=None, ngram_range=(1, 2), min_df=1, sublinear_tf=True)
+        vec = m.TfidfVectorizer(
+            tokenizer=m.SELFIESTokenizer(), analyzer="word", lowercase=False, token_pattern=None, ngram_range=(1, 2), min_df=1, sublinear_tf=True
+        )
         vec.fit(wide_corpus)
         s_prefitted = m.selfies_tfidf_similarity(a, b, vectorizer=vec)
         s_default = m.selfies_tfidf_similarity(a, b)  # corpus defaults to [a, b]
         assert s_prefitted != approx(s_default)
         assert 0.0 <= s_prefitted <= 1.0
-=======
-    def test_vectorizer_reuse(self):
-        corpus = ["[C][C][O]", "[C][C][N]", "[C][C][S]"]
-        vec = m.SELFIESTokenizer()
-        vec_fitted = m.TfidfVectorizer(tokenizer=vec, analyzer="word", lowercase=False,
-                                       token_pattern=None, ngram_range=(1, 2), min_df=1,
-                                       sublinear_tf=True)
-        vec_fitted.fit(corpus)
-        s1 = m.selfies_tfidf_similarity("[C][C][O]", "[C][C][N]", vectorizer=vec_fitted)
-        s2 = m.selfies_tfidf_similarity("[C][C][O]", "[C][C][N]", vectorizer=vec_fitted)
-        assert s1 == approx(s2)
-        assert 0.0 <= s1 <= 1.0
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
 
 # ---------------------------------------------------------------------------
 # 11. Jellyfish-based methods
 # ---------------------------------------------------------------------------
 
-jellyfish_available = pytest.mark.skipif(
-    not m.JELLYFISH_AVAILABLE, reason="jellyfish not installed"
-)
+jellyfish_available = pytest.mark.skipif(not m.JELLYFISH_AVAILABLE, reason="jellyfish not installed")
 
 
 @jellyfish_available
@@ -1204,7 +1145,7 @@ class TestJaroWinklerSimilarity:
     def test_prefix_bonus(self):
         # Jaro-Winkler >= Jaro when strings share a prefix
         jw = m.jaro_winkler_similarity("CCCCO", "CCCCN")
-        j  = m.jaro_similarity("CCCCO", "CCCCN")
+        j = m.jaro_similarity("CCCCO", "CCCCN")
         assert jw >= j
 
 
@@ -1227,6 +1168,7 @@ class TestHammingSimilarity:
 # 12. NCD similarity
 # ---------------------------------------------------------------------------
 
+
 class TestNcdSimilarity:
     def test_identical(self):
         assert m.ncd_similarity("CCO", "CCO") == approx(1.0)
@@ -1240,13 +1182,11 @@ class TestNcdSimilarity:
         assert 0.0 <= s <= 1.0
 
     def test_symmetry(self):
-        assert m.ncd_similarity("CCO", "CCOC") == approx(
-            m.ncd_similarity("CCOC", "CCO"), rel=1e-3
-        )
+        assert m.ncd_similarity("CCO", "CCOC") == approx(m.ncd_similarity("CCOC", "CCO"), rel=1e-3)
 
     def test_similar_higher_than_dissimilar(self):
         close = m.ncd_similarity("CCCCCC", "CCCCCN")
-        far   = m.ncd_similarity("CCCCCC", "c1ccccc1O")
+        far = m.ncd_similarity("CCCCCC", "c1ccccc1O")
         assert close >= far
 
     def test_preprocessing(self):
@@ -1263,26 +1203,52 @@ class TestNcdSimilarity:
 # 13. AVAILABLE_METHODS registry
 # ---------------------------------------------------------------------------
 
+
 class TestAvailableMethods:
     _BPE_MERGE_COUNTS = (16, 32, 64, 256, 512, 1024)
-    _TFIDF_GRID = (
-        {f"{prefix}{m}{n}" for m in range(1, 7) for n in range(m, 7)
-         for prefix in ("tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe_tfidf", "tok-selfies_tfidf")}
-        | {f"tok-bpe{k}_tfidf{m}{n}" for k in _BPE_MERGE_COUNTS for m in range(1, 7) for n in range(m, 7)}
-    )
+    _TFIDF_GRID = {
+        f"{prefix}{m}{n}"
+        for m in range(1, 7)
+        for n in range(m, 7)
+        for prefix in ("tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe_tfidf", "tok-selfies_tfidf")
+    } | {f"tok-bpe{k}_tfidf{m}{n}" for k in _BPE_MERGE_COUNTS for m in range(1, 7) for n in range(m, 7)}
     EXPECTED = {
-        "edit", "nlcs", "clcs", "substring", "smifp_cbd", "smifp_tanimoto",
-        "smifp38_cbd", "smifp38_tanimoto", "lingo", "lingo3", "lingo5",
-        "lingo_tversky", "lingo_tversky_sym", "lingo_dice", "lingo_ruzicka",
-        "spectrum", "spectrum3", "spectrum5", "spectrum_cosine",
-<<<<<<< HEAD
-        "mismatch", "mismatch3", "mismatch5", "lcs_substring", "token_edit",
-        "subsequence", "subsequence2", "subsequence4",
-=======
-        "mismatch", "mismatch3", "mismatch5", "lcs_substring",
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
-        "tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe_tfidf", "tok-selfies_tfidf",
-        "damerau_levenshtein", "jaro", "jaro_winkler", "hamming", "ncd",
+        "edit",
+        "nlcs",
+        "clcs",
+        "substring",
+        "smifp_cbd",
+        "smifp_tanimoto",
+        "smifp38_cbd",
+        "smifp38_tanimoto",
+        "lingo",
+        "lingo3",
+        "lingo5",
+        "lingo_tversky",
+        "lingo_tversky_sym",
+        "lingo_dice",
+        "lingo_ruzicka",
+        "spectrum",
+        "spectrum3",
+        "spectrum5",
+        "spectrum_cosine",
+        "mismatch",
+        "mismatch3",
+        "mismatch5",
+        "lcs_substring",
+        "token_edit",
+        "subsequence",
+        "subsequence2",
+        "subsequence4",
+        "tok-smiles_tfidf",
+        "tok-schwaller_tfidf",
+        "tok-bpe_tfidf",
+        "tok-selfies_tfidf",
+        "damerau_levenshtein",
+        "jaro",
+        "jaro_winkler",
+        "hamming",
+        "ncd",
         *{f"tok-bpe{k}_tfidf" for k in _BPE_MERGE_COUNTS},
     } | _TFIDF_GRID
 
@@ -1316,14 +1282,16 @@ class TestAvailableMethods:
         # entry at once and nothing caught it until it was found by hand.
         # Long/complex molecules avoid degenerate short-string early-returns
         # for high-k/high-q/high-n methods (k<=5, q<=5, n<=6, subsequence n<=4).
-        a = "CC(=O)Oc1ccccc1C(=O)O"          # aspirin
-        b = "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"   # caffeine
+        a = "CC(=O)Oc1ccccc1C(=O)O"  # aspirin
+        b = "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"  # caffeine
 
         def deps_available(info):
             req = info.get("requires")
             return {
-                "scipy": m.SCIPY_AVAILABLE, "sklearn": m.SKLEARN_AVAILABLE,
-                "jellyfish": m.JELLYFISH_AVAILABLE, "selfies": m.SELFIES_AVAILABLE,
+                "scipy": m.SCIPY_AVAILABLE,
+                "sklearn": m.SKLEARN_AVAILABLE,
+                "jellyfish": m.JELLYFISH_AVAILABLE,
+                "selfies": m.SELFIES_AVAILABLE,
             }.get(req, True)
 
         checked = 0
@@ -1341,6 +1309,7 @@ class TestAvailableMethods:
 # ---------------------------------------------------------------------------
 # 14. Batch helpers
 # ---------------------------------------------------------------------------
+
 
 class TestBatchHelpers:
     SMILES = ["CCO", "CCC", "CCCC"]
@@ -1376,13 +1345,13 @@ class TestBatchHelpers:
 
     def test_cross_similarity_matrix_shape(self):
         templates = ["CCO", "CCC"]
-        library   = ["CCCC", "CCOC", "CCOCC"]
+        library = ["CCCC", "CCOC", "CCOCC"]
         mat = m.compute_cross_similarity_matrix(templates, library, method="lingo")
         assert mat.shape == (3, 2)
 
     def test_cross_similarity_range(self):
         templates = ["CCO", "CCC"]
-        library   = ["CCCC", "CCOC"]
+        library = ["CCCC", "CCOC"]
         mat = m.compute_cross_similarity_matrix(templates, library, method="edit")
         assert (mat >= 0).all() and (mat <= 1).all()
 
@@ -1391,23 +1360,33 @@ class TestBatchFeaturizeOnce:
     """The featurize-once fast path must be numerically identical to the
     per-pair fallback for every method it covers."""
 
-    MOLS = ["CC(=O)Oc1ccccc1C(=O)O", "c1ccc(Cl)cc1", "c1ccc(Br)cc1",
-            "C[C@@H](Cl)Br", "CCO", "CC", "O", "c1ccccc1"]
+    MOLS = ["CC(=O)Oc1ccccc1C(=O)O", "c1ccc(Cl)cc1", "c1ccc(Br)cc1", "C[C@@H](Cl)Br", "CCO", "CC", "O", "c1ccccc1"]
     TEMPLATES = ["CCO", "c1ccc(Cl)cc1", "C[C@@H](N)C(=O)O"]
 
     FAST_METHODS = [
-        "lingo", "lingo3", "lingo5", "lingo_tversky", "lingo_tversky_sym",
-        "lingo_dice", "spectrum", "spectrum3", "spectrum5", "spectrum_cosine",
-        "substring", "smifp_tanimoto", "smifp38_tanimoto", "ncd",
+        "lingo",
+        "lingo3",
+        "lingo5",
+        "lingo_tversky",
+        "lingo_tversky_sym",
+        "lingo_dice",
+        "spectrum",
+        "spectrum3",
+        "spectrum5",
+        "spectrum_cosine",
+        "substring",
+        "smifp_tanimoto",
+        "smifp38_tanimoto",
+        "ncd",
     ]
 
     def _ref_and_fast(self, fn, *args, **kw):
         saved = m.BATCH_FEATURIZERS
-        m.BATCH_FEATURIZERS = {}          # disable fast path -> reference
+        m.BATCH_FEATURIZERS = {}  # disable fast path -> reference
         try:
             ref = fn(*args, **kw)
         finally:
-            m.BATCH_FEATURIZERS = saved   # restore
+            m.BATCH_FEATURIZERS = saved  # restore
         fast = fn(*args, **kw)
         return ref, fast
 
@@ -1415,23 +1394,33 @@ class TestBatchFeaturizeOnce:
     @pytest.mark.parametrize("preprocess", [True, False])
     def test_fast_matches_fallback_cross(self, method, preprocess):
         ref, fast = self._ref_and_fast(
-            m.compute_cross_similarity_matrix, self.TEMPLATES, self.MOLS,
-            method=method, preprocess=preprocess,
+            m.compute_cross_similarity_matrix,
+            self.TEMPLATES,
+            self.MOLS,
+            method=method,
+            preprocess=preprocess,
         )
         assert np.allclose(ref, fast, atol=1e-12)
 
     @pytest.mark.parametrize("method", FAST_METHODS)
     def test_fast_matches_fallback_square(self, method):
         ref, fast = self._ref_and_fast(
-            m.compute_similarity_matrix, self.MOLS, method=method, preprocess=True,
+            m.compute_similarity_matrix,
+            self.MOLS,
+            method=method,
+            preprocess=True,
         )
         assert np.allclose(ref, fast, atol=1e-12)
 
     def test_param_override_honoured(self):
         # An explicit q override must flow into the featurizer, matching fallback.
         ref, fast = self._ref_and_fast(
-            m.compute_cross_similarity_matrix, self.TEMPLATES, self.MOLS,
-            method="lingo", q=3, preprocess=True,
+            m.compute_cross_similarity_matrix,
+            self.TEMPLATES,
+            self.MOLS,
+            method="lingo",
+            q=3,
+            preprocess=True,
         )
         assert np.allclose(ref, fast, atol=1e-12)
 
@@ -1441,14 +1430,15 @@ class TestTfidfBatchFitting:
     """The batch path must fit exactly one vectorizer on the whole corpus, using
     the method's registered ngram_range / num_merges (not the (1,2) default)."""
 
-    LIB = ["CC(=O)Oc1ccccc1C(=O)O", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",
-           "c1ccc(Cl)cc1", "CCO", "c1ccccc1O"]
+    LIB = ["CC(=O)Oc1ccccc1C(=O)O", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C", "c1ccc(Cl)cc1", "CCO", "c1ccccc1O"]
     TMPL = ["c1ccc(Br)cc1", "CCOC"]
 
     def _reference(self, tokenizer, ngram):
         from sklearn.feature_extraction.text import TfidfVectorizer
-        vec = TfidfVectorizer(tokenizer=tokenizer, analyzer="word", lowercase=False,
-                              token_pattern=None, ngram_range=ngram, min_df=1, sublinear_tf=True)
+
+        vec = TfidfVectorizer(
+            tokenizer=tokenizer, analyzer="word", lowercase=False, token_pattern=None, ngram_range=ngram, min_df=1, sublinear_tf=True
+        )
         vec.fit(self.TMPL + self.LIB)
         out = np.zeros((len(self.LIB), len(self.TMPL)))
         for i, l in enumerate(self.LIB):
@@ -1473,6 +1463,7 @@ class TestTfidfBatchFitting:
 
     def test_batch_fits_vectorizer_once(self):
         from sklearn.feature_extraction.text import TfidfVectorizer
+
         orig = TfidfVectorizer.fit
         calls = {"n": 0}
 
@@ -1564,46 +1555,6 @@ class TestTfidfGridClosureCapture:
 # 14b. File I/O Functions
 # ---------------------------------------------------------------------------
 
-class TestFileIO:
-    def test_read_smi_file(self, tmp_path):
-        smi_file = tmp_path / "test.smi"
-        smi_file.write_text("CCO ethanol\nCCC propane")
-        molecules = m.read_smiles_from_file(str(smi_file))
-        assert "ethanol" in molecules
-        assert molecules["ethanol"] == "CCO"
-        assert "propane" in molecules
-        assert molecules["propane"] == "CCC"
-
-    def test_read_csv_file(self, tmp_path):
-        csv_file = tmp_path / "test.csv"
-        csv_file.write_text("SMILES,Name\nCCO,ethanol\nCCC,propane")
-        molecules = m.read_smiles_from_file(str(csv_file), smiles_col="SMILES", name_col="Name")
-        assert "ethanol" in molecules
-        assert molecules["ethanol"] == "CCO"
-
-    def test_read_tsv_file(self, tmp_path):
-        tsv_file = tmp_path / "test.tsv"
-        tsv_file.write_text("SMILES\tName\nCCO\tethanol\nCCC\tpropane")
-        molecules = m.read_smiles_from_file(str(tsv_file), smiles_col=0, name_col=1, delimiter="\t")
-        assert "ethanol" in molecules
-        assert molecules["ethanol"] == "CCO"
-
-    def test_read_molecules_from_directory(self, tmp_path):
-        # Create a directory with .smi files
-        dir_path = tmp_path / "molecules"
-        dir_path.mkdir()
-        (dir_path / "mol1.smi").write_text("CCO")
-        (dir_path / "mol2.smi").write_text("CCC propane")
-        molecules = m.read_molecules_from_source(str(dir_path))
-        assert "mol1" in molecules
-        assert molecules["mol1"] == "CCO"
-        assert "propane" in molecules
-        assert molecules["propane"] == "CCC"
-
-
-# ---------------------------------------------------------------------------
-# 14b. File I/O Functions
-# ---------------------------------------------------------------------------
 
 class TestFileIO:
     def test_read_smi_file(self, tmp_path):
@@ -1658,22 +1609,30 @@ EXPECTED_CLI = {
 }
 
 
-@pytest.mark.skipif(
-    not (TEMPLATES_SMI.exists() and DATABASE_SMI.exists()),
-    reason="example files not found"
-)
+@pytest.mark.skipif(not (TEMPLATES_SMI.exists() and DATABASE_SMI.exists()), reason="example files not found")
 class TestCliValidation:
     def test_lingo_output_matches_expected(self, tmp_path):
         out = tmp_path / "results.csv"
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             "--templates", str(TEMPLATES_SMI), "--database", str(DATABASE_SMI),
-             "--output", str(out), "--method", "lingo"],
-            capture_output=True, text=True
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--templates",
+                str(TEMPLATES_SMI),
+                "--database",
+                str(DATABASE_SMI),
+                "--output",
+                str(out),
+                "--method",
+                "lingo",
+            ],
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, result.stderr
 
         import csv
+
         rows = {}
         with open(out) as f:
             reader = csv.DictReader(f)
@@ -1683,15 +1642,11 @@ class TestCliValidation:
         for (lib_name, tmpl_name), expected in EXPECTED_CLI.items():
             col = f"Similarity_{tmpl_name}"
             actual = float(rows[lib_name][col])
-            assert actual == pytest.approx(expected, abs=5e-5), (
-                f"{lib_name} vs {tmpl_name}: expected {expected}, got {actual}"
-            )
+            assert actual == pytest.approx(expected, abs=5e-5), f"{lib_name} vs {tmpl_name}: expected {expected}, got {actual}"
 
     def test_list_methods_exit_zero(self):
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             "--list-methods"],
-            capture_output=True, text=True
+            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"), "--list-methods"], capture_output=True, text=True
         )
         assert result.returncode == 0
         assert "lingo" in result.stdout
@@ -1700,9 +1655,9 @@ class TestCliValidation:
     def test_missing_args_prints_error(self):
         # No positional args but also no --list-methods → prints error and exits 1
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             "--method", "lingo"],   # method given but no paths
-            capture_output=True, text=True
+            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"), "--method", "lingo"],  # method given but no paths
+            capture_output=True,
+            text=True,
         )
         assert result.returncode != 0
 
@@ -1710,10 +1665,21 @@ class TestCliValidation:
     def test_cli_canonicalize(self, tmp_path):
         out = tmp_path / "results.csv"
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             "--templates", str(TEMPLATES_SMI), "--database", str(DATABASE_SMI),
-             "--output", str(out), "--method", "edit", "--canonicalize"],
-            capture_output=True, text=True
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--templates",
+                str(TEMPLATES_SMI),
+                "--database",
+                str(DATABASE_SMI),
+                "--output",
+                str(out),
+                "--method",
+                "edit",
+                "--canonicalize",
+            ],
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, result.stderr
         # Check that output file was created and has expected structure
@@ -1726,10 +1692,21 @@ class TestCliValidation:
     def test_cli_inchi(self, tmp_path):
         out = tmp_path / "results.csv"
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             "--templates", str(TEMPLATES_SMI), "--database", str(DATABASE_SMI),
-             "--output", str(out), "--method", "edit", "--inchi"],
-            capture_output=True, text=True
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--templates",
+                str(TEMPLATES_SMI),
+                "--database",
+                str(DATABASE_SMI),
+                "--output",
+                str(out),
+                "--method",
+                "edit",
+                "--inchi",
+            ],
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, result.stderr
         assert out.exists()
@@ -1738,25 +1715,48 @@ class TestCliValidation:
     def test_cli_selfies(self, tmp_path):
         out = tmp_path / "results.csv"
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             "--templates", str(TEMPLATES_SMI), "--database", str(DATABASE_SMI),
-             "--output", str(out), "--method", "edit", "--selfies"],
-            capture_output=True, text=True
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--templates",
+                str(TEMPLATES_SMI),
+                "--database",
+                str(DATABASE_SMI),
+                "--output",
+                str(out),
+                "--method",
+                "edit",
+                "--selfies",
+            ],
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, result.stderr
         assert out.exists()
 
-<<<<<<< HEAD
     def test_cli_shuffle_reproducible_with_fixed_seed(self, tmp_path):
         # --shuffle is the project's random negative-control mechanism; a fixed
         # --shuffle-seed must make the CLI output byte-for-byte reproducible,
         # and must differ from the unshuffled reference output.
         def run(out):
             return subprocess.run(
-                [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-                 "--templates", str(TEMPLATES_SMI), "--database", str(DATABASE_SMI),
-                 "--output", str(out), "--method", "lingo", "--shuffle", "--shuffle-seed", "42"],
-                capture_output=True, text=True,
+                [
+                    sys.executable,
+                    str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                    "--templates",
+                    str(TEMPLATES_SMI),
+                    "--database",
+                    str(DATABASE_SMI),
+                    "--output",
+                    str(out),
+                    "--method",
+                    "lingo",
+                    "--shuffle",
+                    "--shuffle-seed",
+                    "42",
+                ],
+                capture_output=True,
+                text=True,
             )
 
         out1, out2 = tmp_path / "s1.csv", tmp_path / "s2.csv"
@@ -1764,30 +1764,36 @@ class TestCliValidation:
         assert r1.returncode == 0, r1.stderr
         assert r2.returncode == 0, r2.stderr
         assert out1.read_text() == out2.read_text(), "same --shuffle-seed must reproduce identical output"
-        assert out1.read_text() != EXAMPLES_DIR.joinpath("results.csv").read_text(), (
-            "shuffled output must differ from the unshuffled reference"
-        )
+        assert out1.read_text() != EXAMPLES_DIR.joinpath("results.csv").read_text(), "shuffled output must differ from the unshuffled reference"
 
     def test_cli_sort(self, tmp_path):
         out = tmp_path / "results.csv"
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             "--templates", str(TEMPLATES_SMI), "--database", str(DATABASE_SMI),
-             "--output", str(out), "--method", "lingo", "--sort"],
-            capture_output=True, text=True,
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--templates",
+                str(TEMPLATES_SMI),
+                "--database",
+                str(DATABASE_SMI),
+                "--output",
+                str(out),
+                "--method",
+                "lingo",
+                "--sort",
+            ],
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, result.stderr
         assert out.exists()
-        assert out.read_text() != EXAMPLES_DIR.joinpath("results.csv").read_text(), (
-            "sorted output must differ from the unsorted reference"
-        )
+        assert out.read_text() != EXAMPLES_DIR.joinpath("results.csv").read_text(), "sorted output must differ from the unsorted reference"
 
-=======
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
 # ---------------------------------------------------------------------------
 # 16. Fingerprint functions
 # ---------------------------------------------------------------------------
+
 
 class TestSmifpFingerprint:
     def test_shape_34d(self):
@@ -1814,13 +1820,13 @@ class TestSmifpFingerprint:
     def test_binary_max_one(self):
         # Even with many C atoms, binary caps at 1
         fp_count = m.smifp_fingerprint("CCCCCCCC")
-        fp_bin   = m.smifp_fingerprint("CCCCCCCC", binary=True)
+        fp_bin = m.smifp_fingerprint("CCCCCCCC", binary=True)
         assert fp_count[0] == 8.0
-        assert fp_bin[0]   == 1.0
+        assert fp_bin[0] == 1.0
 
     def test_preprocess_affects_chlorine(self):
         # "CCl" preprocessed → "CL"; 'C' count stays 1, 'l' should not appear
-        fp_pre    = m.smifp_fingerprint("CCl", preprocess=True)
+        fp_pre = m.smifp_fingerprint("CCl", preprocess=True)
         fp_no_pre = m.smifp_fingerprint("CCl", preprocess=False)
         # With preprocess=True, Cl is replaced by L so raw 'l' is gone;
         # without preprocessing 'l' is counted in the catch-all slot.
@@ -1850,6 +1856,7 @@ class TestBpePatternFingerprint:
 
     def test_shape_all_merges(self):
         import json
+
         data = json.loads(BPE_VOCAB.read_text())
         n = len(data["merges"])
         fp = m.bpe_pattern_fingerprint("CCO")
@@ -1875,7 +1882,7 @@ class TestBpePatternFingerprint:
 
     def test_more_merges_more_dimensions(self):
         # More merges → larger fingerprint dimension
-        fp16  = m.bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=16)
+        fp16 = m.bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=16)
         fp512 = m.bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=512)
         assert fp512.shape[0] > fp16.shape[0]
 
@@ -1906,15 +1913,23 @@ class TestBpePatternFingerprint:
 # 17. AVAILABLE_FINGERPRINTS registry
 # ---------------------------------------------------------------------------
 
+
 class TestAvailableFingerprints:
     _BPE_K = (16, 32, 64, 128, 256, 512, 1024)
     EXPECTED = {
-        "smifp34", "smifp34_binary", "smifp38", "smifp38_binary",
-        "bpe_count", "bpe_binary",
+        "smifp34",
+        "smifp34_binary",
+        "smifp38",
+        "smifp38_binary",
+        "bpe_count",
+        "bpe_binary",
         *{f"bpe{k}_count" for k in _BPE_K},
         *{f"bpe{k}_binary" for k in _BPE_K},
-        "phasmifp", "phasmifp_binary", "phasmifp_normalized",
-        "phasmifp12", "phasmifp12_binary",
+        "phasmifp",
+        "phasmifp_binary",
+        "phasmifp_normalized",
+        "phasmifp12",
+        "phasmifp12_binary",
     }
 
     def test_all_fingerprints_registered(self):
@@ -1937,11 +1952,8 @@ class TestAvailableFingerprints:
                 continue  # skip if vocab not available
             fn = info["function"]
             fp = fn("c1ccccc1CCO")
-            assert fp.shape == (expected_len,), (
-                f"{name}: expected length {expected_len}, got {fp.shape[0]}"
-            )
+            assert fp.shape == (expected_len,), f"{name}: expected length {expected_len}, got {fp.shape[0]}"
 
-<<<<<<< HEAD
     def test_declared_params_match_actual_runtime_behaviour(self):
         # The real callers (compute_fingerprint_matrix, the CLI --fingerprint
         # path) NEVER forward a registry entry's "params" dict -- they call
@@ -1968,12 +1980,11 @@ class TestAvailableFingerprints:
                 f"from the registry"
             )
 
-=======
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 
 # ---------------------------------------------------------------------------
 # 18. compute_fingerprint_matrix helper
 # ---------------------------------------------------------------------------
+
 
 class TestComputeFingerprintMatrix:
     SMILES = ["CCO", "CCC", "CCCC", "c1ccccc1"]
@@ -2012,23 +2023,29 @@ class TestComputeFingerprintMatrix:
 # 19. Fingerprint CLI integration
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skipif(
-    not DATABASE_SMI.exists(),
-    reason="example database.smi not found"
-)
+
+@pytest.mark.skipif(not DATABASE_SMI.exists(), reason="example database.smi not found")
 class TestFingerprintCli:
     def test_smifp34_cli(self, tmp_path):
         out = tmp_path / "fp.csv"
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             "--fingerprint", "smifp34",
-             "--database", str(DATABASE_SMI),
-             "--output", str(out)],
-            capture_output=True, text=True
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--fingerprint",
+                "smifp34",
+                "--database",
+                str(DATABASE_SMI),
+                "--output",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, result.stderr
         assert out.exists()
         import csv
+
         with open(out) as f:
             rows = list(csv.DictReader(f))
         assert len(rows) > 0
@@ -2040,24 +2057,30 @@ class TestFingerprintCli:
     def test_bpe64_count_cli(self, tmp_path):
         out = tmp_path / "fp_bpe.csv"
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             "--fingerprint", "bpe64_count",
-             "--database", str(DATABASE_SMI),
-             "--output", str(out)],
-            capture_output=True, text=True
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--fingerprint",
+                "bpe64_count",
+                "--database",
+                str(DATABASE_SMI),
+                "--output",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, result.stderr
         assert out.exists()
         import csv
+
         with open(out) as f:
             rows = list(csv.DictReader(f))
         assert len(rows[0]) == 65  # Name + 64 bits
 
     def test_list_fingerprints_cli(self):
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             "--list-fingerprints"],
-            capture_output=True, text=True
+            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"), "--list-fingerprints"], capture_output=True, text=True
         )
         assert result.returncode == 0
         assert "smifp34" in result.stdout
@@ -2065,19 +2088,31 @@ class TestFingerprintCli:
 
     def test_fingerprint_no_database_exits_nonzero(self):
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-             "--fingerprint", "smifp34",
-             "--output", "/tmp/ignored.csv"],
-            capture_output=True, text=True
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--fingerprint",
+                "smifp34",
+                "--output",
+                "/tmp/ignored.csv",
+            ],
+            capture_output=True,
+            text=True,
         )
         assert result.returncode != 0
 
     def test_overwrite_flag(self, tmp_path):
         out = tmp_path / "fp.csv"
-        cmd = [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"),
-               "--fingerprint", "smifp34",
-               "--database", str(DATABASE_SMI),
-               "--output", str(out)]
+        cmd = [
+            sys.executable,
+            str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+            "--fingerprint",
+            "smifp34",
+            "--database",
+            str(DATABASE_SMI),
+            "--output",
+            str(out),
+        ]
         subprocess.run(cmd, capture_output=True)
         # Second run without --overwrite should still exit 0 (skip with warning)
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -2091,6 +2126,7 @@ class TestFingerprintCli:
 # 20. PhaSMIfp unit tests
 # ---------------------------------------------------------------------------
 
+
 def test_pharmacophoric_fingerprint():
     """Standalone test for pharmacophoric_fingerprint and helpers."""
 
@@ -2102,12 +2138,12 @@ def test_pharmacophoric_fingerprint():
     assert fp12.shape == (12,), f"Expected 12D, got {fp12.shape}"
 
     # 2. Binary mode: all values 0.0 or 1.0
-    fp_bin = m.pharmacophoric_fingerprint("CCO", output='binary')
+    fp_bin = m.pharmacophoric_fingerprint("CCO", output="binary")
     assert fp_bin.shape == (78,)
     assert set(fp_bin.tolist()).issubset({0.0, 1.0}), "Binary mode has non-0/1 values"
 
     # 3. Normalized mode: first 12 dims sum to ≤ 1.0 (or exactly 0 for zero vector)
-    fp_norm = m.pharmacophoric_fingerprint("CCO", output='normalized')
+    fp_norm = m.pharmacophoric_fingerprint("CCO", output="normalized")
     assert fp_norm.shape == (78,)
     s = fp_norm[:12].sum()
     assert s <= 1.0 + 1e-9, f"Normalized first-12 sum > 1: {s}"
@@ -2119,7 +2155,6 @@ def test_pharmacophoric_fingerprint():
     assert ac[1] > 0, "Acetamide: A (acceptor) should be > 0"
     assert ac[0] > 0, "Acetamide: D (donor) should be > 0"
 
-<<<<<<< HEAD
     # Carbonyl detection: the '=' token's carbon partner is resolved by walking
     # back past any already-closed branch when '=' is NOT immediately preceded
     # by '(' (the "skip past any closed branches before '='" code path).  Three
@@ -2130,15 +2165,13 @@ def test_pharmacophoric_fingerprint():
     assert m._compute_pharmacophore_counts("CC(=O)N")[8] == 1, "CC(=O)N: E should be 1"
     assert m._compute_pharmacophore_counts("CC(N)=O")[8] == 1, "CC(N)=O: E should be 1 (closed-branch-skip path)"
     assert m._compute_pharmacophore_counts("O=C(N)C")[8] == 1, "O=C(N)C: E should be 1 (reversed O=C order)"
-    assert m.canonicalize_smiles("CC(N)=O") == "CC(N)=O", (
-        "sanity check: RDKit's own canonical form must still exercise the closed-branch-skip path"
-    )
+    assert (
+        m.canonicalize_smiles("CC(N)=O") == "CC(N)=O"
+    ), "sanity check: RDKit's own canonical form must still exercise the closed-branch-skip path"
     # Two independent carbonyls, one via each code path, must both be counted.
     two_carbonyls = m._compute_pharmacophore_counts("C(C(=O)O)(=O)O")
     assert two_carbonyls[8] == 2, f"C(C(=O)O)(=O)O: E should be 2, got {two_carbonyls[8]}"
 
-=======
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
     # Benzene: R == 6, T == 0
     bz = m._compute_pharmacophore_counts(m.canonicalize_smiles("c1ccccc1"))
     assert bz[2] == 6, f"Benzene: R should be 6, got {bz[2]}"
@@ -2164,10 +2197,8 @@ def test_pharmacophoric_fingerprint():
     for i in range(12):
         for j in range(i + 1, 12):
             pw = fp_count[12 + pair_idx]
-            assert pw <= counts_12[i] + 1e-9, \
-                f"Pairwise[{i},{j}]={pw} > count[{i}]={counts_12[i]}"
-            assert pw <= counts_12[j] + 1e-9, \
-                f"Pairwise[{i},{j}]={pw} > count[{j}]={counts_12[j]}"
+            assert pw <= counts_12[i] + 1e-9, f"Pairwise[{i},{j}]={pw} > count[{i}]={counts_12[i]}"
+            assert pw <= counts_12[j] + 1e-9, f"Pairwise[{i},{j}]={pw} > count[{j}]={counts_12[j]}"
             pair_idx += 1
 
     # 6. Zero / invalid SMILES returns zero vector without raising

@@ -241,7 +241,7 @@ def _is_tfidf_method_kept(name: str) -> bool:
     if tfidf_idx == -1:
         return True  # not a tfidf method
 
-    ngram_suffix = name[tfidf_idx + len("_tfidf"):]  # e.g. "44", "12", "" (alias)
+    ngram_suffix = name[tfidf_idx + len("_tfidf") :]  # e.g. "44", "12", "" (alias)
     prefix = name[:tfidf_idx]  # e.g. "tok-smiles", "tok-bpe64", "tok-bpe"
 
     # Check ngram suffix: "" (alias → maps to "12") is always kept
@@ -251,7 +251,7 @@ def _is_tfidf_method_kept(name: str) -> bool:
     # For BPE methods, also check the merge-count size
     # prefix is "tok-bpe{k}" for fixed-size or "tok-bpe" for full-vocab
     if prefix.startswith("tok-bpe"):
-        size_str = prefix[len("tok-bpe"):]  # e.g. "64", "256", "" (full-vocab)
+        size_str = prefix[len("tok-bpe") :]  # e.g. "64", "256", "" (full-vocab)
         if size_str and size_str not in _BPE_KEEP_SIZES:
             return False
 
@@ -273,10 +273,7 @@ def get_valid_methods(variant: dict) -> list[str] | None:
     import smiles_similarity_kernels as _ssk  # lazy import
 
     valid = [
-        name
-        for name in _ssk.AVAILABLE_METHODS
-        if not any(name.startswith(pfx) for pfx in excluded_prefixes)
-        and _is_tfidf_method_kept(name)
+        name for name in _ssk.AVAILABLE_METHODS if not any(name.startswith(pfx) for pfx in excluded_prefixes) and _is_tfidf_method_kept(name)
     ]
 
     # If nothing was filtered out, signal the caller to use --all-methods
@@ -386,7 +383,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jobs", "-j", type=int, default=1, metavar="N", help="Run N variants in parallel (default: 1)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show per-method progress inside each variant run")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing them")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files. Without this flag, existing files are skipped with a warning.")
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing output files. Without this flag, existing files are skipped with a warning."
+    )
     return parser.parse_args()
 
 
