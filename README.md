@@ -250,11 +250,11 @@ Name,Similarity_0054-0090,Similarity_0133-0086
 
 Motivated by [our paper](https://doi.org/10.1093/bib/bbaf620) where query-weighted Tversky consistently outperformed Tanimoto on nucleic-acid targets.
 
-| CLI name            | Function                   | Description                                                                  | Requires |
-| ------------------- | -------------------------- | ---------------------------------------------------------------------------- | -------- |
-| `lingo_tversky`     | `lingo_tversky_similarity` | **Asymmetric Tversky on LINGO q-grams** (q=4, α=0.9, β=0.1) — query-weighted | —        |
-| `lingo_tversky_sym` | `lingo_tversky_similarity` | Symmetric Tversky (α=β=0.5, equivalent to Dice) on LINGO q-grams             | —        |
-| `lingo_dice`        | `lingo_dice_similarity`    | Sørensen–Dice coefficient on LINGO q-gram counts (q=4)                       | —        |
+| CLI name            | Function                   | Description                                                                         | Requires |
+| ------------------- | -------------------------- | ----------------------------------------------------------------------------------- | -------- |
+| `lingo_tversky`     | `lingo_tversky_similarity` | **Asymmetric Tversky on LINGO q-grams** (q=4, α=0.9, β=0.1) — query-weighted        | —        |
+| `lingo_tversky_sym` | `lingo_tversky_similarity` | Symmetric Tversky (α=β=0.5, equivalent to Dice) on LINGO q-grams                    | —        |
+| `lingo_dice`        | `lingo_dice_similarity`    | Sørensen–Dice coefficient on LINGO q-gram counts (q=4)                              | —        |
 | `lingo_ruzicka`     | `lingo_ruzicka_similarity` | Ruzicka / weighted Jaccard on LINGO q-gram counts (q=4): Σmin/Σmax = Tversky(α=β=1) | —        |
 
 > **Ruzicka note:** `lingo_ruzicka` is the count-aware generalisation of the Jaccard index, `Σ_i min(N₁ᵢ,N₂ᵢ) / Σ_i max(N₁ᵢ,N₂ᵢ)` over q-gram multiplicities. It equals the multiset Tversky with α=β=1 (implemented by delegating to it) and is **distinct** from the vector/cosine-Tanimoto in `spectrum` (`dot/(‖A‖²+‖B‖²−dot)`) and from Dice. Symmetric, in [0, 1].
@@ -290,15 +290,15 @@ Four tokenizer-backed TF-IDF families, each covering the full n-gram grid m∈{1
 | CLI name pattern            | Function                     | Tokenizer                  | Description                                                             | Requires     |
 | --------------------------- | ---------------------------- | -------------------------- | ----------------------------------------------------------------------- | ------------ |
 | `tok-smiles_tfidf`          | `smiles_tfidf_similarity`    | `SMILESTokenizer`          | Alias for `tok-smiles_tfidf12` (default n-gram range)                   | scikit-learn |
-| `tok-smiles_tfidf{m}{n}`    | `smiles_tfidf_similarity`    | `SMILESTokenizer`          | Chemical-token TF-IDF, ngram (m, n); e.g. `tok-smiles_tfidf44`         | scikit-learn |
+| `tok-smiles_tfidf{m}{n}`    | `smiles_tfidf_similarity`    | `SMILESTokenizer`          | Chemical-token TF-IDF, ngram (m, n); e.g. `tok-smiles_tfidf44`          | scikit-learn |
 | `tok-schwaller_tfidf`       | `schwaller_tfidf_similarity` | `SMILESTokenizerSchwaller` | Alias for `tok-schwaller_tfidf12` (default n-gram range)                | scikit-learn |
 | `tok-schwaller_tfidf{m}{n}` | `schwaller_tfidf_similarity` | `SMILESTokenizerSchwaller` | Schwaller atom-level TF-IDF, ngram (m, n); e.g. `tok-schwaller_tfidf44` | scikit-learn |
 | `tok-bpe_tfidf`             | `bpe_tfidf_similarity`       | `SMILESTokenizerBPE`       | Alias for `tok-bpe_tfidf12` (uses all merges from vocab file)           | scikit-learn |
-| `tok-bpe_tfidf{m}{n}`       | `bpe_tfidf_similarity`       | `SMILESTokenizerBPE`       | BPE TF-IDF (all merges), ngram (m, n); e.g. `tok-bpe_tfidf44`          | scikit-learn |
-| `tok-bpe{k}_tfidf`          | `bpe_tfidf_similarity`       | `SMILESTokenizerBPE`       | Alias for `tok-bpe{k}_tfidf12`; k ∈ {16, 32, 64, 256, 512, 1024}       | scikit-learn |
+| `tok-bpe_tfidf{m}{n}`       | `bpe_tfidf_similarity`       | `SMILESTokenizerBPE`       | BPE TF-IDF (all merges), ngram (m, n); e.g. `tok-bpe_tfidf44`           | scikit-learn |
+| `tok-bpe{k}_tfidf`          | `bpe_tfidf_similarity`       | `SMILESTokenizerBPE`       | Alias for `tok-bpe{k}_tfidf12`; k ∈ {16, 32, 64, 256, 512, 1024}        | scikit-learn |
 | `tok-bpe{k}_tfidf{m}{n}`    | `bpe_tfidf_similarity`       | `SMILESTokenizerBPE`       | BPE TF-IDF using first k merges, ngram (m, n); e.g. `tok-bpe64_tfidf44` | scikit-learn |
 | `tok-selfies_tfidf`         | `selfies_tfidf_similarity`   | `SELFIESTokenizer`         | Alias for `tok-selfies_tfidf12` (default n-gram range)                  | scikit-learn |
-| `tok-selfies_tfidf{m}{n}`   | `selfies_tfidf_similarity`   | `SELFIESTokenizer`         | SELFIES-token TF-IDF, ngram (m, n); e.g. `tok-selfies_tfidf44`         | scikit-learn |
+| `tok-selfies_tfidf{m}{n}`   | `selfies_tfidf_similarity`   | `SELFIESTokenizer`         | SELFIES-token TF-IDF, ngram (m, n); e.g. `tok-selfies_tfidf44`          | scikit-learn |
 
 **Tokenizers:**
 
@@ -406,14 +406,14 @@ python smiles_similarity_kernels.py \
 
 ### Additional string metrics (extensions)
 
-| CLI name              | Function                         | Description                                                         | Requires  |
-| --------------------- | -------------------------------- | ------------------------------------------------------------------- | --------- |
+| CLI name              | Function                         | Description                                                                      | Requires  |
+| --------------------- | -------------------------------- | -------------------------------------------------------------------------------- | --------- |
 | `token_edit`          | `token_edit_similarity`          | Levenshtein edit distance over **atom-level tokens** (Schwaller), not characters | —         |
-| `damerau_levenshtein` | `damerau_levenshtein_similarity` | Like edit distance but transpositions cost 1 (not 2)                | jellyfish |
-| `jaro`                | `jaro_similarity`                | Jaro similarity                                                     | jellyfish |
-| `jaro_winkler`        | `jaro_winkler_similarity`        | Jaro-Winkler (prefix-weighted)                                      | jellyfish |
-| `hamming`             | `hamming_similarity`             | Hamming distance, shorter string padded                             | jellyfish |
-| `ncd`                 | `ncd_similarity`                 | Normalized Compression Distance via gzip; universal, parameter-free | —         |
+| `damerau_levenshtein` | `damerau_levenshtein_similarity` | Like edit distance but transpositions cost 1 (not 2)                             | jellyfish |
+| `jaro`                | `jaro_similarity`                | Jaro similarity                                                                  | jellyfish |
+| `jaro_winkler`        | `jaro_winkler_similarity`        | Jaro-Winkler (prefix-weighted)                                                   | jellyfish |
+| `hamming`             | `hamming_similarity`             | Hamming distance, shorter string padded                                          | jellyfish |
+| `ncd`                 | `ncd_similarity`                 | Normalized Compression Distance via gzip; universal, parameter-free              | —         |
 
 > **Token-edit note:** `token_edit` tokenizes each SMILES into chemically-meaningful units with the Schwaller atom-level tokenizer (`[nH+]`, `[C@@H]`, `Br`, ring digits and bond symbols are each one token) and computes Levenshtein distance over the *token sequences*, normalized by the larger token count: `1 - editdistance(tok(S1), tok(S2)) / max(|tok(S1)|, |tok(S2)|)`. A one-atom change costs exactly one edit — chemically more interpretable than the character-level `edit`. Pass a different `tokenizer=` (e.g. `SMILESTokenizerBPE`) to score at fragment granularity. `preprocess` is ignored: the tokenizer already handles multi-character atoms.
 
@@ -546,12 +546,12 @@ All fingerprints are:
 
 The SMIfp fingerprint counts occurrences of a fixed character set in the preprocessed SMILES string.
 
-| Type | CLI name | Dimensions | Values |
-|---|---|---|---|
-| Count (default) | `smifp34` | 34 | character counts |
-| Binary | `smifp34_binary` | 34 | 0/1 presence |
-| Extended count | `smifp38` | 36* | character counts |
-| Extended binary | `smifp38_binary` | 36* | 0/1 presence |
+| Type            | CLI name         | Dimensions | Values           |
+| --------------- | ---------------- | ---------- | ---------------- |
+| Count (default) | `smifp34`        | 34         | character counts |
+| Binary          | `smifp34_binary` | 34         | 0/1 presence     |
+| Extended count  | `smifp38`        | 36*        | character counts |
+| Extended binary | `smifp38_binary` | 36*        | 0/1 presence     |
 
 *The "38D" variant removes `%` from the 34D set and adds `/`, `\`, `@@`; actual size is 36.
 
@@ -574,12 +574,12 @@ Uses the BPE merge table (trained on ChEMBL) as a fixed pattern dictionary.  Eac
 - Complementary to SMIfp: focuses on multi-atom fragments (`C(=O)N`, `c1ccccc1`, …) rather than raw characters
 - Base single-character tokens are excluded — those are already captured by SMIfp
 
-| Type | CLI name | Dimensions | Values |
-|---|---|---|---|
-| Count (all merges) | `bpe_count` | all merges in vocab | token counts |
-| Binary (all merges) | `bpe_binary` | all merges in vocab | 0/1 presence |
-| Count (k merges) | `bpe{k}_count` | k | token counts |
-| Binary (k merges) | `bpe{k}_binary` | k | 0/1 presence |
+| Type                | CLI name        | Dimensions          | Values       |
+| ------------------- | --------------- | ------------------- | ------------ |
+| Count (all merges)  | `bpe_count`     | all merges in vocab | token counts |
+| Binary (all merges) | `bpe_binary`    | all merges in vocab | 0/1 presence |
+| Count (k merges)    | `bpe{k}_count`  | k                   | token counts |
+| Binary (k merges)   | `bpe{k}_binary` | k                   | 0/1 presence |
 
 Available fixed-k values: 16, 32, 64, 128, 256, 512, 1024.
 
@@ -642,16 +642,16 @@ The convert/normalize/augment pipeline flags (`--canonicalize`, `--inchi`, `--se
 python smiles_similarity_kernels.py --list-fingerprints
 ```
 
-| CLI name | Length | Description |
-|---|---|---|
-| `smifp34` | 34 | SMIfp character-frequency count |
-| `smifp34_binary` | 34 | SMIfp binary (presence/absence) |
-| `smifp38` | 36 | SMIfp extended count (adds `/`, `\`, `@@`; removes `%`) |
-| `smifp38_binary` | 36 | SMIfp extended binary |
-| `bpe_count` | all merges | BPE-pattern count (all merges in vocab) |
-| `bpe_binary` | all merges | BPE-pattern binary (all merges in vocab) |
-| `bpe{k}_count` | k | BPE-pattern count, k ∈ {16,32,64,128,256,512,1024} |
-| `bpe{k}_binary` | k | BPE-pattern binary, k ∈ {16,32,64,128,256,512,1024} |
+| CLI name         | Length     | Description                                             |
+| ---------------- | ---------- | ------------------------------------------------------- |
+| `smifp34`        | 34         | SMIfp character-frequency count                         |
+| `smifp34_binary` | 34         | SMIfp binary (presence/absence)                         |
+| `smifp38`        | 36         | SMIfp extended count (adds `/`, `\`, `@@`; removes `%`) |
+| `smifp38_binary` | 36         | SMIfp extended binary                                   |
+| `bpe_count`      | all merges | BPE-pattern count (all merges in vocab)                 |
+| `bpe_binary`     | all merges | BPE-pattern binary (all merges in vocab)                |
+| `bpe{k}_count`   | k          | BPE-pattern count, k ∈ {16,32,64,128,256,512,1024}      |
+| `bpe{k}_binary`  | k          | BPE-pattern binary, k ∈ {16,32,64,128,256,512,1024}     |
 
 ## Batch Processing
 
@@ -719,10 +719,6 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `--shuffle`                   |       | **[augment]** Randomly shuffle characters — **negative control**, type-agnostic, applied after all conversions                                      |
 | `--shuffle-seed SEED`         |       | **[augment]** Random seed for `--shuffle` (default: non-reproducible).                                                                              |
 | `--sort`                      |       | **[augment]** Sort characters alphabetically — **deterministic negative control**, type-agnostic, applied after all conversions                     |
-<<<<<<< HEAD
-=======
-| `--overwrite`                 |       | Overwrite existing output files. Without this flag, existing files are **skipped with a warning** printed to stderr.                                |
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
 | `--verbose`, `-v`             |       | Print progress                                                                                                                                      |
 | `--templates-smiles-col COL`  |       | SMILES column name/index in templates file                                                                                                          |
 | `--templates-name-col COL`    |       | Name column in templates file                                                                                                                       |
@@ -753,37 +749,21 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 
 ## Performance
 
-<<<<<<< HEAD
 Batch helpers (`compute_similarity_matrix`, `compute_cross_similarity_matrix`) use a **featurize-once** fast path for feature-based methods (`lingo*`, `spectrum*`, `substring`, `smifp*`, `ncd`): each molecule's representation is computed a single time and only the cheap pairwise reduction runs per pair, instead of re-deriving both molecules' features on every comparison. On multi-template screens this is ~3–10× faster (e.g. `substring` ~10×, `spectrum`/`smifp` ~7–8×) and produces bit-for-bit identical results. Methods with inherently pairwise cost (edit/NLCS/CLCS DP, mismatch, TF-IDF) are unaffected.
 
-| Method                                            | Complexity     | Notes                                                       |
-| ------------------------------------------------- | -------------- | ----------------------------------------------------------- |
-| `lingo`, `lingo_tversky`, `lingo_dice`, `smifp_*` | O(n)           | Fastest — recommended for large-scale screening             |
-| `spectrum`                                        | O(n)           | Very fast, equivalent cost to LINGO                         |
-| `mismatch` (k=4, m=1)                             | O(n·k·\|Σ\|)   | ~20–50× slower than `spectrum` for typical SMILES alphabets |
-| `mismatch` (m≥2)                                  | O(n·k²·\|Σ\|²) | Expensive — use only for short SMILES or small alphabets    |
-| `lcs_substring`                                   | O(m×n)         | DP — same cost as `nlcs`                                    |
+| Method                                            | Complexity     | Notes                                                                         |
+| ------------------------------------------------- | -------------- | ----------------------------------------------------------------------------- |
+| `lingo`, `lingo_tversky`, `lingo_dice`, `smifp_*` | O(n)           | Fastest — recommended for large-scale screening                               |
+| `spectrum`                                        | O(n)           | Very fast, equivalent cost to LINGO                                           |
+| `mismatch` (k=4, m=1)                             | O(n·k·\|Σ\|)   | ~20–50× slower than `spectrum` for typical SMILES alphabets                   |
+| `mismatch` (m≥2)                                  | O(n·k²·\|Σ\|²) | Expensive — use only for short SMILES or small alphabets                      |
+| `lcs_substring`                                   | O(m×n)         | DP — same cost as `nlcs`                                                      |
 | `edit`, `nlcs`, `clcs`, `token_edit`              | O(m×n)         | DP — slow for long SMILES (`token_edit` over tokens, so m,n are token counts) |
-| `subsequence` (n, λ)                              | O(n·m·m')      | Gap-weighted DP; self-kernels cached once per string in batch |
-| `substring`                                       | O(m²+n²)       | Can be slow for long SMILES                                 |
-| `smiles_tfidf{m}{n}`, `selfies_tfidf{m}{n}`       | O(corpus)      | Fit once on full corpus for batch use; cost grows with n    |
-| `ncd`                                             | O(n log n)     | Compression overhead; fine for millions                     |
-| jellyfish methods                                 | O(n)           | Very fast via C extension                                   |
-
-=======
-| Method                                              | Complexity     | Notes                                                       |
-| --------------------------------------------------- | -------------- | ----------------------------------------------------------- |
-| `lingo`, `lingo_tversky`, `lingo_dice`, `smifp_*`   | O(n)           | Fastest — recommended for large-scale screening             |
-| `spectrum`                                          | O(n)           | Very fast, equivalent cost to LINGO                         |
-| `mismatch` (k=4, m=1)                               | O(n·k·\|Σ\|)   | ~20–50× slower than `spectrum` for typical SMILES alphabets |
-| `mismatch` (m≥2)                                    | O(n·k²·\|Σ\|²) | Expensive — use only for short SMILES or small alphabets    |
-| `lcs_substring`                                     | O(m×n)         | DP — same cost as `nlcs`                                    |
-| `edit`, `nlcs`, `clcs`                              | O(m×n)         | DP — slow for long SMILES                                   |
-| `substring`                                         | O(m²+n²)       | Can be slow for long SMILES                                 |
-| `tok-smiles_tfidf{m}{n}`, `tok-selfies_tfidf{m}{n}` | O(corpus)      | Fit once on full corpus for batch use; cost grows with n    |
-| `ncd`                                               | O(n log n)     | Compression overhead; fine for millions                     |
-| jellyfish methods                                   | O(n)           | Very fast via C extension                                   |
->>>>>>> f713c7b8e6706865a30c394a106eedd589241d24
+| `subsequence` (n, λ)                              | O(n·m·m')      | Gap-weighted DP; self-kernels cached once per string in batch                 |
+| `substring`                                       | O(m²+n²)       | Can be slow for long SMILES                                                   |
+| `smiles_tfidf{m}{n}`, `selfies_tfidf{m}{n}`       | O(corpus)      | Fit once on full corpus for batch use; cost grows with n                      |
+| `ncd`                                             | O(n log n)     | Compression overhead; fine for millions                                       |
+| jellyfish methods                                 | O(n)           | Very fast via C extension                                                     |
 
 ## Citation
 
