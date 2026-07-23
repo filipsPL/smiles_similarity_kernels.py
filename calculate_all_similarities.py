@@ -83,18 +83,25 @@ _SELFIES_EXCLUDED = frozenset(["tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-b
 # ---------------------------------------------------------------------------
 # TF-IDF pruning
 #
-# Running the full ngram grid (1,1)–(6,6) = 21 combos per tokenizer family
-# is a hyperparameter sweep. Empirically (4,4) performs best; we keep a small
-# representative set to cut ~7× off TF-IDF compute time.
-#
-# BPE merge-count axis: 7 sizes (16–1024 + full). Keep three representatives
-# spanning the range plus the full-vocabulary model.
+# Running the full ngram grid (1,1)–(6,6) = 21 combos per tokenizer family is
+# a hyperparameter sweep; _TFIDF_KEEP_NGRAMS/_BPE_KEEP_SIZES below can narrow
+# it to a representative subset (empirically (4,4) performs best) to cut
+# compute time. This mattered a great deal when TF-IDF/BPE was the pipeline's
+# dominant cost by orders of magnitude (see git history / root CLAUDE.md) —
+# it no longer is, now that both the retokenization redundancy and
+# SMILESTokenizerBPE's own algorithm are fixed (µs/pair, not ms–s/pair), so
+# _PRUNE_TFIDF_GRID defaults to False (full grid) as of 2026-07-15. Flip it
+# back to True for a quick/cheap exploratory run; the keep-sets are left
+# in place either way.
 # ---------------------------------------------------------------------------
 
-# ngram suffixes to keep, e.g. "11", "12", "44"
+_PRUNE_TFIDF_GRID = False
+
+# ngram suffixes to keep when _PRUNE_TFIDF_GRID is True, e.g. "11", "12", "44"
 _TFIDF_KEEP_NGRAMS = frozenset(["11", "12", "44"])
 
-# BPE merge counts to keep (plus the unsuffixed full-vocabulary variant)
+# BPE merge counts to keep when _PRUNE_TFIDF_GRID is True (plus the unsuffixed
+# full-vocabulary variant)
 _BPE_KEEP_SIZES = frozenset(["64", "256", "1024"])
 
 
@@ -223,6 +230,9 @@ def _is_tfidf_method_kept(name: str) -> bool:
     """
     Return False for TF-IDF methods that fall outside the pruned ngram/BPE grid.
 
+    A no-op (always returns True) when _PRUNE_TFIDF_GRID is False — the
+    current default, full-grid coverage. When True:
+
     Kept:
       - Non-TF-IDF methods (always kept).
       - tok-{family}_tfidf{mn} where mn ∈ _TFIDF_KEEP_NGRAMS.
@@ -234,6 +244,8 @@ def _is_tfidf_method_kept(name: str) -> bool:
       - tok-{family}_tfidf{mn} where mn ∉ _TFIDF_KEEP_NGRAMS.
       - tok-bpe{k}_tfidf{mn/alias} where k ∉ _BPE_KEEP_SIZES.
     """
+    if not _PRUNE_TFIDF_GRID:
+        return True
     if not name.startswith("tok-"):
         return True
     # Identify tfidf methods by the "_tfidf" marker
@@ -262,8 +274,11 @@ def get_valid_methods(variant: dict) -> list[str] | None:
     """
     Return the list of method names valid for this variant.
 
-    Always applies TF-IDF/BPE pruning (_TFIDF_KEEP_NGRAMS, _BPE_KEEP_SIZES).
-    Additionally filters by variant's 'excluded_method_prefixes' when present.
+    Applies TF-IDF/BPE ngram-grid pruning (_TFIDF_KEEP_NGRAMS, _BPE_KEEP_SIZES)
+    when _PRUNE_TFIDF_GRID is True; a no-op otherwise (current default: full
+    grid). Additionally filters by variant's 'excluded_method_prefixes' when
+    present — this is a *representation-validity* filter (e.g. tok-smiles_tfidf*
+    is meaningless on InChI), independent of _PRUNE_TFIDF_GRID, and always applies.
 
     Returns None only when no filtering at all is needed (no exclusions and
     TF-IDF pruning is off), so the caller can use --all-methods instead.

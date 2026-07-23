@@ -379,6 +379,34 @@ class TestSubstringKernelSimilarity:
     def test_symmetry(self):
         assert m.substring_kernel_similarity("CCO", "CCOC") == approx(m.substring_kernel_similarity("CCOC", "CCO"))
 
+    def test_both_empty_returns_one(self):
+        # Regression: both-empty is "equally empty" (1.0), matching the
+        # convention used by every other similarity function in this module
+        # (e.g. nlcs_similarity, longest_common_substring_similarity) rather
+        # than falling through to the k11==0/k22==0 branch's 0.0.
+        assert m.substring_kernel_similarity("", "", preprocess=False) == approx(1.0)
+
+    def test_one_empty_returns_zero(self):
+        # Only one side empty must still be 0.0 -- the both-empty fix must not
+        # affect this genuinely-dissimilar case.
+        assert m.substring_kernel_similarity("", "CCO", preprocess=False) == approx(0.0)
+
+    def test_both_empty_batch_fast_path_matches_fallback(self):
+        # Two distinct empty-string entries exercise the off-diagonal
+        # (empty, empty) cell -- the diagonal is force-set to 1.0 regardless
+        # of this fix, so it alone wouldn't exercise the batch combine() path.
+        mols = ["", "", "CCO"]
+        saved = m.BATCH_FEATURIZERS
+        m.BATCH_FEATURIZERS = {}
+        try:
+            ref = m.compute_similarity_matrix(mols, method="substring", preprocess=False)
+        finally:
+            m.BATCH_FEATURIZERS = saved
+        fast = m.compute_similarity_matrix(mols, method="substring", preprocess=False)
+        assert np.allclose(ref, fast, atol=1e-12)
+        assert fast[0, 1] == approx(1.0)
+        assert fast[0, 2] == approx(0.0)
+
 
 # ---------------------------------------------------------------------------
 # 7. SMIfp similarities
@@ -488,6 +516,43 @@ class TestSpectrumKernelSimilarity:
         # (short-string degenerate cases return early, before validation).
         with pytest.raises(ValueError):
             m.spectrum_kernel_similarity("CCCCCCCC", "CCCCCCCN", coefficient="bogus")
+
+    def test_tversky_and_overlap_known_value(self):
+        # s1="AABB" bigrams: AA:1, AB:1, BB:1  (sum1=3)
+        # s2="ABBBB" bigrams: AB:1, BB:3        (sum2=4)
+        # intersection = min(AA)+min(AB)+min(BB) = 0+1+1 = 2
+        # only1 (unique to s1) = 1 (AA); only2 (unique to s2) = 2 (BB)
+        s1, s2 = "AABB", "ABBBB"
+        sym = m.spectrum_kernel_similarity(s1, s2, k=2, coefficient="tversky", alpha=0.5, beta=0.5, preprocess=False)
+        assert sym == approx(2 / 3.5)  # 2 / (2 + 0.5*1 + 0.5*2)
+        asym = m.spectrum_kernel_similarity(s1, s2, k=2, coefficient="tversky", alpha=0.9, beta=0.1, preprocess=False)
+        assert asym == approx(2 / 3.1)  # 2 / (2 + 0.9*1 + 0.1*2)
+        overlap = m.spectrum_kernel_similarity(s1, s2, k=2, coefficient="overlap", preprocess=False)
+        assert overlap == approx(2 / 3.0)  # 2 / min(3, 4)
+
+    def test_tversky_asymmetric(self):
+        s1, s2 = "AABB", "ABBBB"
+        forward = m.spectrum_kernel_similarity(s1, s2, k=2, coefficient="tversky", alpha=0.9, beta=0.1, preprocess=False)
+        backward = m.spectrum_kernel_similarity(s2, s1, k=2, coefficient="tversky", alpha=0.9, beta=0.1, preprocess=False)
+        assert forward != approx(backward)
+
+    def test_tversky_sym_default_equals_dice(self):
+        # alpha=beta=0.5 (the function default) is the multiset Sorensen-Dice coefficient.
+        s1, s2 = "AABB", "ABBBB"
+        tversky_default = m.spectrum_kernel_similarity(s1, s2, k=2, coefficient="tversky", preprocess=False)
+        tversky_explicit = m.spectrum_kernel_similarity(s1, s2, k=2, coefficient="tversky", alpha=0.5, beta=0.5, preprocess=False)
+        assert tversky_default == approx(tversky_explicit)
+
+    def test_overlap_symmetric(self):
+        s1, s2 = "AABB", "ABBBB"
+        assert m.spectrum_kernel_similarity(s1, s2, k=2, coefficient="overlap", preprocess=False) == approx(
+            m.spectrum_kernel_similarity(s2, s1, k=2, coefficient="overlap", preprocess=False)
+        )
+
+    def test_tversky_overlap_range(self):
+        for coef in ("tversky", "overlap"):
+            s = m.spectrum_kernel_similarity("CCO", "CCOC", coefficient=coef)
+            assert 0.0 <= s <= 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -683,6 +748,67 @@ class TestTokenEditSimilarity:
         assert fn("CCO", "CCO") == approx(1.0)
 
 
+class TestMongeElkanSimilarity:
+    _EXACT = staticmethod(lambda t1, t2: 1.0 if t1 == t2 else 0.0)
+    _CHARS = staticmethod(lambda s: list(s))
+
+    def test_identical(self):
+        assert m.monge_elkan_similarity("CC(=O)Oc1ccccc1C(=O)O", "CC(=O)Oc1ccccc1C(=O)O") == approx(1.0)
+
+    def test_range(self):
+        s = m.monge_elkan_similarity("CCO", "CCOC")
+        assert 0.0 <= s <= 1.0
+
+    def test_empty_both(self):
+        assert m.monge_elkan_similarity("", "") == approx(1.0)
+
+    def test_empty_one(self):
+        assert m.monge_elkan_similarity("", "CCO") == approx(0.0)
+
+    def test_known_value_asymmetric(self):
+        # A = ['A','B'] (len 2), B = ['A','B','C','D'] (len 4), exact-match token sim.
+        # forward: avg over A -> A matches A (1), B matches B (1) -> 2/2 = 1.0
+        # backward: avg over B -> A(1), B(1), C(0), D(0) -> 2/4 = 0.5
+        a, b = "AB", "ABCD"
+        forward = m.monge_elkan_similarity(a, b, tokenizer=self._CHARS, token_similarity=self._EXACT)
+        backward = m.monge_elkan_similarity(b, a, tokenizer=self._CHARS, token_similarity=self._EXACT)
+        assert forward == approx(1.0)
+        assert backward == approx(0.5)
+        assert forward != approx(backward)
+
+    def test_bidirectional_averages_both_directions(self):
+        a, b = "AB", "ABCD"
+        forward = m.monge_elkan_similarity(a, b, tokenizer=self._CHARS, token_similarity=self._EXACT)
+        backward = m.monge_elkan_similarity(b, a, tokenizer=self._CHARS, token_similarity=self._EXACT)
+        bidir = m.monge_elkan_similarity(a, b, tokenizer=self._CHARS, token_similarity=self._EXACT, bidirectional=True)
+        assert bidir == approx((forward + backward) / 2.0)
+
+    def test_default_gives_partial_credit_for_near_miss_tokens(self):
+        # A single-character change on a bracket atom should score higher than 0
+        # under the default char-edit token similarity, unlike exact-token matching.
+        a, b = "[nH+]c1ccccc1", "[NH+]c1ccccc1"
+        default_score = m.monge_elkan_similarity(a, b)
+        exact_score = m.monge_elkan_similarity(a, b, token_similarity=self._EXACT)
+        assert default_score > exact_score
+
+    def test_custom_tokenizer_and_token_similarity(self):
+        got = m.monge_elkan_similarity("AB", "ABCD", tokenizer=self._CHARS, token_similarity=self._EXACT)
+        assert got == approx(1.0)
+
+    def test_registered_methods(self):
+        fwd_fn = m.get_similarity_function("monge_elkan")
+        sym_fn = m.get_similarity_function("monge_elkan_sym")
+        a, b = "c1ccccc1CCCCCCCCCC", "c1ccccc1CC"
+        assert fwd_fn(a, b) == approx(m.monge_elkan_similarity(a, b))
+        assert sym_fn(a, b) == approx(m.monge_elkan_similarity(a, b, bidirectional=True))
+
+    def test_is_symmetric_method(self):
+        assert m.is_symmetric_method("monge_elkan") is False
+        assert m.is_symmetric_method("monge_elkan", {"bidirectional": True}) is True
+        assert m.is_symmetric_method("monge_elkan", {"bidirectional": False}) is False
+        assert m.is_symmetric_method("monge_elkan_sym") is True
+
+
 # ---------------------------------------------------------------------------
 # 8. LINGO similarity
 # ---------------------------------------------------------------------------
@@ -776,6 +902,68 @@ class TestLingoRuzickaSimilarity:
             m.BATCH_FEATURIZERS = saved
         fast = m.compute_cross_similarity_matrix(tmpl, lib, method="lingo_ruzicka", preprocess=True)
         assert np.allclose(ref, fast, atol=1e-12)
+
+
+class TestLingoBinarySimilarity:
+    PAIRS = [("CCO", "CCCO"), ("c1ccccc1CCCCCCCCCC", "c1ccccc1CC"), ("CC(=O)Oc1ccccc1C(=O)O", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C")]
+
+    def test_identical(self):
+        assert m.lingo_jaccard_binary_similarity("CC(=O)Oc1ccccc1", "CC(=O)Oc1ccccc1") == approx(1.0)
+        assert m.lingo_dice_binary_similarity("CC(=O)Oc1ccccc1", "CC(=O)Oc1ccccc1") == approx(1.0)
+
+    def test_no_common_lingos(self):
+        assert m.lingo_jaccard_binary_similarity("CC", "OO", q=4) == approx(1.0)
+        assert m.lingo_dice_binary_similarity("CC", "OO", q=4) == approx(1.0)
+
+    def test_one_empty_lingos(self):
+        assert m.lingo_jaccard_binary_similarity("CCCCC", "OO", q=4) == approx(0.0)
+        assert m.lingo_dice_binary_similarity("CCCCC", "OO", q=4) == approx(0.0)
+
+    def test_range_and_symmetry(self):
+        for a, b in self.PAIRS:
+            j = m.lingo_jaccard_binary_similarity(a, b)
+            d = m.lingo_dice_binary_similarity(a, b)
+            assert 0.0 <= j <= 1.0
+            assert 0.0 <= d <= 1.0
+            assert j == approx(m.lingo_jaccard_binary_similarity(b, a))
+            assert d == approx(m.lingo_dice_binary_similarity(b, a))
+
+    def test_equals_intersection_over_union(self):
+        # Ground truth: binary Jaccard = |set1 & set2| / |set1 | set2| over the
+        # *set* of distinct q-grams (multiplicity discarded).
+        for a, b in self.PAIRS:
+            set1 = set(m.get_lingos(a, 4, normalize_rings=True, preprocess=True))
+            set2 = set(m.get_lingos(b, 4, normalize_rings=True, preprocess=True))
+            expected = len(set1 & set2) / len(set1 | set2) if (set1 | set2) else 1.0
+            assert m.lingo_jaccard_binary_similarity(a, b) == approx(expected)
+
+    def test_dice_is_monotonic_transform_of_jaccard(self):
+        # DSC = 2J / (1 + J) -- the two metrics rank pairs identically.
+        for a, b in self.PAIRS:
+            j = m.lingo_jaccard_binary_similarity(a, b)
+            d = m.lingo_dice_binary_similarity(a, b)
+            assert d == approx(2.0 * j / (1.0 + j))
+
+    def test_distinct_from_multiset_variants(self):
+        # On a pair with repeated q-grams, discarding multiplicity must change the score.
+        a, b = "c1ccccc1CCCCCCCCCC", "c1ccccc1CC"
+        assert m.lingo_jaccard_binary_similarity(a, b) != approx(m.lingo_ruzicka_similarity(a, b))
+        assert m.lingo_dice_binary_similarity(a, b) != approx(m.lingo_dice_similarity(a, b))
+
+    def test_registered_and_batch_fast_path(self):
+        assert m.get_similarity_function("lingo_jaccard_binary")("CCO", "CCO") == approx(1.0)
+        assert m.get_similarity_function("lingo_dice_binary")("CCO", "CCO") == approx(1.0)
+        lib = ["CCO", "c1ccccc1CC", "CC(=O)Oc1ccccc1C(=O)O", "CCN"]
+        tmpl = ["c1ccccc1CCCCCCCCCC", "CCOC"]
+        for method in ("lingo_jaccard_binary", "lingo_dice_binary"):
+            saved = m.BATCH_FEATURIZERS
+            m.BATCH_FEATURIZERS = {}
+            try:
+                ref = m.compute_cross_similarity_matrix(tmpl, lib, method=method, preprocess=True)
+            finally:
+                m.BATCH_FEATURIZERS = saved
+            fast = m.compute_cross_similarity_matrix(tmpl, lib, method=method, preprocess=True)
+            assert np.allclose(ref, fast, atol=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -1031,6 +1219,136 @@ class TestSMILESTokenizerBPE:
         assert len(tokens) > 0
 
 
+def _naive_bpe_apply_merges(tokens, merges):
+    """
+    Reference implementation: the original pre-optimization algorithm from
+    SMILESTokenizerBPE.tokenize() (rescans the whole token list once per rule,
+    in rank order). Kept only here, deliberately independent of the module's
+    current (fast, priority-queue) implementation, so TestSMILESTokenizerBPEFuzz
+    has something to check the fast path against that isn't just "itself".
+    """
+    tokens = list(tokens)
+    for a, b in merges:
+        merged = a + b
+        out = []
+        i = 0
+        while i < len(tokens):
+            if i < len(tokens) - 1 and tokens[i] == a and tokens[i + 1] == b:
+                out.append(merged)
+                i += 2
+            else:
+                out.append(tokens[i])
+                i += 1
+        tokens = out
+    return tokens
+
+
+@bpe_vocab_available
+class TestSMILESTokenizerBPEFuzz:
+    """
+    Exhaustive random fuzzing of ``_apply_merges`` (the priority-queue merge
+    over a doubly-linked token list, tracking each token's creation rank)
+    against ``_naive_bpe_apply_merges`` (the original per-rule-rescan
+    algorithm it replaced), on synthetic token sequences and merge tables —
+    not constrained to what the SMILES regex actually produces, so this
+    covers chained/overlapping/repeated-token merge scenarios, including
+    deliberately adversarial (not realistically trained) merge tables, far
+    more densely than real SMILES strings would. Mirrors the
+    TestSubsequenceKernel.test_raw_dp_matches_brute_force pattern: the fast
+    path's correctness is pinned against a brute-force reference, not just a
+    handful of hand-picked expected outputs.
+
+    Earlier iterations of this suite caught two genuine divergences before
+    this file settled on the current algorithm:
+      1. A low-rank rule referencing a token only a higher-rank rule ever
+         produces (rule i's operand can't exist yet when naive reaches rank
+         i, but the naive greedy algorithm without rank tracking would use it
+         as soon as it appeared).
+      2. Two different rules that happen to concatenate to the same string,
+         reachable at different ranks depending on which one actually fires
+         on a given input — a purely static "is this vocabulary well-formed"
+         check (checking rule i's operands against the *earliest* rank that
+         could ever produce that string) cannot catch this, since it doesn't
+         know which producer rule actually fires on a specific input.
+    Both are covered here by test_regression_low_rank_uses_future_token and
+    test_regression_ambiguous_producer_rank respectively; the general fuzz
+    below tests the same property at scale.
+    """
+
+    def _random_merges(self, rng, alphabet, n_merges):
+        """Merge rules drawn from arbitrary short concatenations, not
+        constrained to look like real BPE training output — includes
+        both well-formed-by-construction and adversarial orderings."""
+        candidates = set()
+        for _ in range(n_merges * 3):
+            a = rng.choice(alphabet + ["".join(rng.choices(alphabet, k=2)) for _ in range(2)])
+            b = rng.choice(alphabet + ["".join(rng.choices(alphabet, k=2)) for _ in range(2)])
+            candidates.add((a, b))
+        return rng.sample(sorted(candidates), k=min(n_merges, len(candidates)))
+
+    @pytest.mark.parametrize("trial", range(500))
+    def test_matches_naive_random(self, trial):
+        import random
+
+        rng = random.Random(trial)
+        alphabet = [str(i) for i in range(rng.randint(2, 5))]
+        tokens = [rng.choice(alphabet) for _ in range(rng.randint(0, 12))]
+        merges = self._random_merges(rng, alphabet, rng.randint(0, 10))
+
+        tok = m.SMILESTokenizerBPE()
+        tok._merges = merges
+
+        fast = tok._apply_merges(tokens)
+        ref = _naive_bpe_apply_merges(tokens, merges)
+        assert fast == ref, f"tokens={tokens!r} merges={merges!r}"
+
+    def test_regression_low_rank_uses_future_token(self):
+        """A low-rank rule ('2', '23') references a token ('23') that is only
+        ever producible by a later rule ('2', '3'). Naive never applies
+        ('2','23') on this input since '23' doesn't exist yet when rank 3 is
+        checked (rank 4 hasn't run); an unguarded greedy algorithm would
+        eagerly merge it as soon as '23' appears later."""
+        tokens = ["2", "3", "0", "2", "1", "0", "1", "1", "2", "2", "3", "0"]
+        merges = [("3", "10"), ("02", "0"), ("0", "2"), ("2", "23"), ("2", "3"), ("12", "22"), ("0", "3")]
+
+        tok = m.SMILESTokenizerBPE()
+        tok._merges = merges
+        assert tok._apply_merges(tokens) == _naive_bpe_apply_merges(tokens, merges)
+
+    def test_regression_ambiguous_producer_rank(self):
+        """Two different rules — ('0', '101') at rank 2 and ('01', '01') at
+        rank 5 — both concatenate to '0101'. Rank 2 never actually fires on
+        this input (its own prerequisite, a bare '1' next to '01', never
+        occurs), so the only real producer is rank 5 — meaning a rank-4 rule
+        ('00', '0101') must NOT fire, even though a naive per-table check
+        would see '0101' as "producible by rank 2 < 4" and wrongly allow it."""
+        tokens = ["0", "0", "0", "1", "0", "1", "0", "1", "1"]
+        merges = [("0", "1"), ("1", "01"), ("0", "101"), ("0", "0"), ("00", "0101"), ("01", "01")]
+
+        tok = m.SMILESTokenizerBPE()
+        tok._merges = merges
+        assert tok._apply_merges(tokens) == _naive_bpe_apply_merges(tokens, merges)
+
+    def test_matches_naive_real_vocab_real_smiles(self):
+        smiles_examples = [
+            "CC(=O)Oc1ccccc1C(=O)O",
+            "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",
+            "c1ccc2ccccc2c1",
+            "CC(C)Cc1ccc(cc1)C(C)C(=O)O",
+            "O=C(O)c1ccccc1O",
+            "[Na+].[Cl-]",
+            "C1CCCCC1",
+            "CC(=O)Nc1ccc(O)cc1",
+        ]
+        for smi in smiles_examples:
+            for num_merges in (0, 1, 16, 64, 256, 1024, None):
+                tok = m.SMILESTokenizerBPE(num_merges=num_merges)
+                base_tokens = tok._BASE_RE.findall(smi)
+                fast = tok._apply_merges(base_tokens)
+                ref = _naive_bpe_apply_merges(base_tokens, tok._merges)
+                assert fast == ref, f"smiles={smi!r} num_merges={num_merges}"
+
+
 @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="scikit-learn not installed")
 class TestBpeTfidfSimilarity:
     @bpe_vocab_available
@@ -1225,15 +1543,22 @@ class TestAvailableMethods:
         "lingo_tversky_sym",
         "lingo_dice",
         "lingo_ruzicka",
+        "lingo_jaccard_binary",
+        "lingo_dice_binary",
         "spectrum",
         "spectrum3",
         "spectrum5",
         "spectrum_cosine",
+        "spectrum_tversky",
+        "spectrum_tversky_sym",
+        "spectrum_overlap",
         "mismatch",
         "mismatch3",
         "mismatch5",
         "lcs_substring",
         "token_edit",
+        "monge_elkan",
+        "monge_elkan_sym",
         "subsequence",
         "subsequence2",
         "subsequence4",
@@ -1340,6 +1665,34 @@ class TestBatchHelpers:
         mat = m.compute_similarity_matrix([a, b], method="lingo_tversky", symmetric=True)
         assert mat[0, 1] == approx(mat[1, 0])
 
+    def test_similarity_matrix_asymmetric_spectrum_tversky(self):
+        # Same regression as lingo_tversky above, for the newer spectrum_tversky method.
+        a, b = "c1ccccc1CCCCCCCCCC", "c1ccccc1CC"
+        mat = m.compute_similarity_matrix([a, b], method="spectrum_tversky")
+        sim_func = m.get_similarity_function("spectrum_tversky")
+        assert mat[0, 1] == approx(sim_func(a, b))
+        assert mat[1, 0] == approx(sim_func(b, a))
+        assert mat[0, 1] != approx(mat[1, 0])
+
+    def test_similarity_matrix_asymmetric_monge_elkan(self):
+        # monge_elkan is not in BATCH_FEATURIZERS (it accepts callable overrides
+        # that the primitive-typed batch-param mechanism can't proxy), so this
+        # exercises the general per-pair path's asymmetric handling instead of
+        # the featurize-once fast path exercised by the two tests above.
+        # Uses the exact-match token scorer (see TestMongeElkanSimilarity) since
+        # under the default char-edit scorer, per-token best-match (rather than
+        # multiset counting) tends to find *some* partial-credit match for every
+        # token regardless of direction, so a hand-picked pair is needed to force
+        # a visible forward/backward gap.
+        a, b = "AB", "ABCD"
+        char_split = list
+        exact_match = lambda t1, t2: 1.0 if t1 == t2 else 0.0
+        mat = m.compute_similarity_matrix([a, b], method="monge_elkan", tokenizer=char_split, token_similarity=exact_match)
+        sim_func = m.get_similarity_function("monge_elkan")
+        assert mat[0, 1] == approx(sim_func(a, b, tokenizer=char_split, token_similarity=exact_match))
+        assert mat[1, 0] == approx(sim_func(b, a, tokenizer=char_split, token_similarity=exact_match))
+        assert mat[0, 1] != approx(mat[1, 0])
+
     def test_cross_similarity_matrix_shape(self):
         templates = ["CCO", "CCC"]
         library = ["CCCC", "CCOC", "CCOCC"]
@@ -1367,10 +1720,16 @@ class TestBatchFeaturizeOnce:
         "lingo_tversky",
         "lingo_tversky_sym",
         "lingo_dice",
+        "lingo_ruzicka",
+        "lingo_jaccard_binary",
+        "lingo_dice_binary",
         "spectrum",
         "spectrum3",
         "spectrum5",
         "spectrum_cosine",
+        "spectrum_tversky",
+        "spectrum_tversky_sym",
+        "spectrum_overlap",
         "substring",
         "smifp_tanimoto",
         "smifp38_tanimoto",
@@ -1474,6 +1833,84 @@ class TestTfidfBatchFitting:
         finally:
             TfidfVectorizer.fit = orig
         assert calls["n"] == 1
+
+
+@pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="sklearn not installed")
+class TestTfidfMatrixBatchedFastPath:
+    """
+    The TF-IDF matrix fast path (vectorizer.transform(list) once + a single
+    cosine_similarity matrix multiply, in compute_similarity_matrix /
+    compute_cross_similarity_matrix) must be numerically identical to the
+    per-pair fallback (sim_func(s1, s2, vectorizer=...) called once per pair).
+
+    This matters most for tok-bpe*_tfidf* methods: SMILESTokenizerBPE.tokenize()
+    is O(num_merges x token_count) per call, and the per-pair path calls
+    vectorizer.transform([s]) -> tokenizer(s) once per pair each string
+    appears in, so on a real templates x library grid every string got
+    retokenized once per template — multi-day runtimes on real datasets.
+    The fast path transforms each string once total. Mirrors the
+    TestBatchFeaturizeOnce pattern used for BATCH_FEATURIZERS.
+    """
+
+    MOLS = ["CC(=O)Oc1ccccc1C(=O)O", "c1ccc(Cl)cc1", "c1ccc(Br)cc1", "C[C@@H](Cl)Br", "CCO", "CC", "O", "c1ccccc1"]
+    TEMPLATES = ["CCO", "c1ccc(Cl)cc1", "C[C@@H](N)C(=O)O"]
+
+    TFIDF_METHODS = [
+        "tok-bpe64_tfidf12",
+        "tok-bpe256_tfidf44",
+        "tok-bpe_tfidf12",
+        "tok-smiles_tfidf12",
+        "tok-schwaller_tfidf44",
+        "tok-selfies_tfidf12",
+    ]
+
+    def _per_pair_cross_reference(self, templates, library, method, preprocess):
+        """Reconstructs the pre-fix per-pair loop: same _build_batch_kwargs (one
+        vectorizer fit on the full corpus) but sim_func called once per pair,
+        exactly as compute_cross_similarity_matrix's general path used to."""
+        sim_func = m.get_similarity_function(method)
+        corpus = list(templates) + list(library)
+        filtered_kwargs, corpus = m._build_batch_kwargs(sim_func, method, corpus, {"preprocess": preprocess})
+        t, l = corpus[: len(templates)], corpus[len(templates) :]
+        out = np.zeros((len(l), len(t)))
+        for i, lib_s in enumerate(l):
+            for j, tmpl_s in enumerate(t):
+                out[i, j] = sim_func(lib_s, tmpl_s, **filtered_kwargs)
+        return out
+
+    def _per_pair_square_reference(self, mols, method, preprocess):
+        sim_func = m.get_similarity_function(method)
+        filtered_kwargs, corpus = m._build_batch_kwargs(sim_func, method, list(mols), {"preprocess": preprocess})
+        n = len(corpus)
+        out = np.zeros((n, n))
+        for i in range(n):
+            out[i, i] = 1.0
+            for j in range(i + 1, n):
+                out[i, j] = out[j, i] = sim_func(corpus[i], corpus[j], **filtered_kwargs)
+        return out
+
+    @pytest.mark.parametrize("method", TFIDF_METHODS)
+    @pytest.mark.parametrize("preprocess", [True, False])
+    def test_fast_matches_fallback_cross(self, method, preprocess):
+        is_selfies = method.startswith("tok-selfies")
+        if is_selfies and not m.SELFIES_AVAILABLE:
+            pytest.skip("selfies not installed")
+        mols = [m.smiles_to_selfies(s) for s in self.MOLS] if is_selfies else self.MOLS
+        templates = [m.smiles_to_selfies(s) for s in self.TEMPLATES] if is_selfies else self.TEMPLATES
+        fast = m.compute_cross_similarity_matrix(templates, mols, method=method, preprocess=preprocess)
+        ref = self._per_pair_cross_reference(templates, mols, method, preprocess)
+        assert np.allclose(ref, fast, atol=1e-12)
+
+    @pytest.mark.parametrize("method", TFIDF_METHODS)
+    def test_fast_matches_fallback_square(self, method):
+        is_selfies = method.startswith("tok-selfies")
+        if is_selfies and not m.SELFIES_AVAILABLE:
+            pytest.skip("selfies not installed")
+        mols = [m.smiles_to_selfies(s) for s in self.MOLS] if is_selfies else self.MOLS
+        preprocess = False if is_selfies else True
+        fast = m.compute_similarity_matrix(mols, method=method, preprocess=preprocess)
+        ref = self._per_pair_square_reference(mols, method, preprocess)
+        assert np.allclose(ref, fast, atol=1e-12)
 
 
 @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="sklearn not installed")
@@ -2168,6 +2605,16 @@ def test_pharmacophoric_fingerprint():
     # Two independent carbonyls, one via each code path, must both be counted.
     two_carbonyls = m._compute_pharmacophore_counts("C(C(=O)O)(=O)O")
     assert two_carbonyls[8] == 2, f"C(C(=O)O)(=O)O: E should be 2, got {two_carbonyls[8]}"
+
+    # Regression: a ring-closure digit sitting directly between the atom and
+    # the '(=O)' branch (or the bare '=') must not block carbonyl detection.
+    # 'O=C1CCCCC1' and 'C1(=O)CCCCC1' are both valid SMILES for cyclohexanone;
+    # the ring digit sits at exactly the position _skip_back_to_atom must skip.
+    assert m._compute_pharmacophore_counts("O=C1CCCCC1")[8] == 1, "O=C1CCCCC1: E should be 1"
+    assert m._compute_pharmacophore_counts("C1(=O)CCCCC1")[8] == 1, "C1(=O)CCCCC1: E should be 1 (ring-digit-before-branch)"
+    assert m._compute_pharmacophore_counts("C1=O")[8] == 1, "C1=O: E should be 1 (ring-digit-before-bare-=)"
+    # Two-digit %NN ring closure must be skipped the same way.
+    assert m._compute_pharmacophore_counts("C%10(=O)CCCCCCCCCC%10")[8] == 1, "%NN ring closure before branch: E should be 1"
 
     # Benzene: R == 6, T == 0
     bz = m._compute_pharmacophore_counts(m.canonicalize_smiles("c1ccccc1"))
