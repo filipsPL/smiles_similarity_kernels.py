@@ -1628,6 +1628,44 @@ class TestAvailableMethods:
         assert checked >= 200, f"expected to check at least 200 methods, only checked {checked}"
 
 
+class TestRegistryParamOverrides:
+    """Registry entries with a fixed-param lambda (e.g. lingo3 hard-coding q=3)
+    must let an explicit kwarg override the default, both when calling the
+    registered function directly and via the batch matrix helpers, instead of
+    raising a duplicate-keyword TypeError on the direct path while silently
+    honouring the override only in the batch fast path."""
+
+    CASES = [
+        ("lingo3", {"q": 5}),
+        ("spectrum3", {"k": 5}),
+        ("spectrum_tversky", {"alpha": 0.5}),
+        ("mismatch3", {"k": 4}),
+        ("monge_elkan_sym", {"bidirectional": False}),
+        ("subsequence2", {"n": 4}),
+    ]
+
+    def test_direct_call_honours_override(self):
+        a, b = "CCCCCCCCO", "CCCCCCN"
+        for name, override in self.CASES:
+            fn = m.get_similarity_function(name)
+            overridden = fn(a, b, **override)
+            default = fn(a, b)
+            # Whichever the default-param call returns, passing the override
+            # explicitly must not raise and must actually take effect.
+            direct_key = next(iter(override))
+            base_key_default = m.AVAILABLE_METHODS[name]["params"].get(direct_key)
+            if base_key_default != override[direct_key]:
+                assert overridden != approx(default), f"{name}: override {override} had no effect"
+
+    def test_direct_and_batch_paths_agree(self):
+        a, b = "CCCCCCCCO", "CCCCCCN"
+        for name, override in self.CASES:
+            fn = m.get_similarity_function(name)
+            direct = fn(a, b, **override)
+            batch = m.compute_similarity_matrix([a, b], method=name, **override)[0, 1]
+            assert direct == approx(batch), f"{name}: direct={direct} batch={batch}"
+
+
 # ---------------------------------------------------------------------------
 # 14. Batch helpers
 # ---------------------------------------------------------------------------
@@ -1704,6 +1742,29 @@ class TestBatchHelpers:
         library = ["CCCC", "CCOC"]
         mat = m.compute_cross_similarity_matrix(templates, library, method="edit")
         assert (mat >= 0).all() and (mat <= 1).all()
+
+    def test_cross_similarity_asymmetric_template_is_query(self):
+        # Regression: for query-weighted lingo_tversky, the template (not the
+        # library candidate) must be treated as the query (first argument),
+        # matching lingo_tversky_similarity's own docstring convention.
+        templates = ["c1ccccc1CCCCCCCCCC"]
+        library = ["c1ccccc1CC"]
+        mat = m.compute_cross_similarity_matrix(templates, library, method="lingo_tversky")
+        assert mat[0, 0] == approx(m.lingo_tversky_similarity(templates[0], library[0]))
+        assert mat[0, 0] != approx(m.lingo_tversky_similarity(library[0], templates[0]))
+
+    def test_cross_similarity_asymmetric_template_is_query_general_path(self):
+        # Same regression via the general (non-featurized) per-pair path.
+        templates = ["AB"]
+        library = ["ABCD"]
+        char_split = list
+        exact_match = lambda t1, t2: 1.0 if t1 == t2 else 0.0
+        mat = m.compute_cross_similarity_matrix(
+            templates, library, method="monge_elkan", tokenizer=char_split, token_similarity=exact_match
+        )
+        sim_func = m.get_similarity_function("monge_elkan")
+        assert mat[0, 0] == approx(sim_func(templates[0], library[0], tokenizer=char_split, token_similarity=exact_match))
+        assert mat[0, 0] != approx(sim_func(library[0], templates[0], tokenizer=char_split, token_similarity=exact_match))
 
 
 class TestBatchFeaturizeOnce:
@@ -2661,3 +2722,26 @@ def test_pharmacophoric_fingerprint():
     assert names[11] == "pharm_G"
     assert names[12] == "pharm_DA"
     assert names[77] == "pharm_SG"
+
+
+@pytest.mark.skipif(not m.RDKIT_AVAILABLE, reason="requires rdkit")
+def test_pharmacophoric_fingerprint_canonicalize_opt_out():
+    # Regression: pharmacophoric_fingerprint used to canonicalize unconditionally
+    # whenever RDKit was available, with no way to opt out (unlike every other
+    # fingerprint function's preprocess=/canonicalize-style parameter). A
+    # non-canonical SMILES whose canonical form differs materially should now
+    # produce different counts depending on canonicalize=True/False.
+    non_canonical = "OC(=O)c1ccccc1C(=O)Oc1ccccc1"  # deliberately non-canonical ordering
+    fp_canon = m.pharmacophoric_fingerprint(non_canonical, canonicalize=True)
+    fp_raw = m.pharmacophoric_fingerprint(non_canonical, canonicalize=False)
+    assert fp_raw.shape == fp_canon.shape == (78,)
+    # canonicalize=False must skip RDKit entirely: counts come straight off the
+    # given string, matching an explicit canonicalize_smiles + counts=False call.
+    raw_direct = m._compute_pharmacophore_counts(non_canonical)
+    assert (fp_raw[:12] == raw_direct).all()
+
+    # phasmifp12 / phasmifp12_binary registry entries expose the same knob.
+    fp12_canon = m.get_fingerprint_function("phasmifp12")(non_canonical, canonicalize=True)
+    fp12_raw = m.get_fingerprint_function("phasmifp12")(non_canonical, canonicalize=False)
+    assert (fp12_raw == raw_direct).all()
+    assert fp12_canon.shape == fp12_raw.shape == (12,)

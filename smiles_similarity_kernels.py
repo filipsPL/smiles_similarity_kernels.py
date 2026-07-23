@@ -3348,6 +3348,7 @@ def get_pharmacophoric_feature_names() -> List[str]:
 def pharmacophoric_fingerprint(
     smiles: str,
     output: str = "count",
+    canonicalize: bool = True,
 ) -> np.ndarray:
     """
     PhaSMIfp: 78D pharmacophoric SMILES fingerprint.
@@ -3369,6 +3370,12 @@ def pharmacophoric_fingerprint(
         'binary'     — presence/absence (clip counts to 0/1)
         'normalized' — divide by sum of 12D count vector (float, sums to 1
                        for the first 12 dimensions; pairwise scaled accordingly)
+    canonicalize : bool
+        Whether to RDKit-canonicalize *smiles* before counting (default
+        True), when RDKit is available. Set False to count on the input
+        string as given — e.g. for shuffled/negative-control inputs, or
+        non-SMILES representations, where canonicalization is meaningless
+        or would defeat the purpose of the input transform.
 
     Returns
     -------
@@ -3378,7 +3385,7 @@ def pharmacophoric_fingerprint(
     if not smiles:
         return np.zeros(78, dtype=float)
 
-    smi = canonicalize_smiles(smiles) if RDKIT_AVAILABLE else smiles
+    smi = canonicalize_smiles(smiles) if (canonicalize and RDKIT_AVAILABLE) else smiles
     if not smi:
         smi = smiles
 
@@ -3492,15 +3499,17 @@ AVAILABLE_FINGERPRINTS: Dict[str, dict] = {
         "params": {"output": "normalized"},
     },
     "phasmifp12": {
-        "function": lambda smi, **kw: _compute_pharmacophore_counts((canonicalize_smiles(smi) if RDKIT_AVAILABLE else smi) or smi),
+        "function": lambda smi, canonicalize=True, **kw: _compute_pharmacophore_counts(
+            (canonicalize_smiles(smi) if (canonicalize and RDKIT_AVAILABLE) else smi) or smi
+        ),
         "description": "PhaSMIfp 12D pharmacophoric class count vector only (no pairwise layer)",
         "length": 12,
         "params": {},
     },
     "phasmifp12_binary": {
-        "function": lambda smi, **kw: (_compute_pharmacophore_counts((canonicalize_smiles(smi) if RDKIT_AVAILABLE else smi) or smi) > 0).astype(
-            float
-        ),
+        "function": lambda smi, canonicalize=True, **kw: (
+            _compute_pharmacophore_counts((canonicalize_smiles(smi) if (canonicalize and RDKIT_AVAILABLE) else smi) or smi) > 0
+        ).astype(float),
         "description": "PhaSMIfp 12D pharmacophoric class binary vector only (no pairwise layer)",
         "length": 12,
         "params": {},
@@ -3582,7 +3591,7 @@ AVAILABLE_METHODS = {
     "nlcs": {"function": nlcs_similarity, "description": "Normalized Longest Common Subsequence", "params": {}},
     "clcs": {"function": clcs_similarity, "description": "Combined LCS models", "params": {}},
     "substring": {
-        "function": lambda s1, s2, **kw: substring_kernel_similarity(s1, s2, normalized=True, **kw),
+        "function": lambda s1, s2, **kw: substring_kernel_similarity(s1, s2, **{**{"normalized": True}, **kw}),
         "description": "Substring kernel (normalized)",
         "params": {},
     },
@@ -3594,24 +3603,24 @@ AVAILABLE_METHODS = {
     },
     "smifp_tanimoto": {"function": smifp_similarity_tanimoto, "description": "SMILES fingerprint 34D with Tanimoto", "params": {}},
     "smifp38_cbd": {
-        "function": lambda s1, s2, **kw: smifp_similarity_cityblock(s1, s2, chars=SMIFP_CHARS_38, **kw),
+        "function": lambda s1, s2, **kw: smifp_similarity_cityblock(s1, s2, **{**{"chars": SMIFP_CHARS_38}, **kw}),
         "description": "SMILES fingerprint 38D with City Block Distance (Manhattan)",
         "params": {},
         "requires": "scipy",
     },
     "smifp38_tanimoto": {
-        "function": lambda s1, s2, **kw: smifp_similarity_tanimoto(s1, s2, chars=SMIFP_CHARS_38, **kw),
+        "function": lambda s1, s2, **kw: smifp_similarity_tanimoto(s1, s2, **{**{"chars": SMIFP_CHARS_38}, **kw}),
         "description": "SMILES fingerprint 38D with Tanimoto",
         "params": {},
     },
     "lingo": {"function": lingo_similarity, "description": "LINGO similarity (q=4)", "params": {"q": 4}},
     "lingo3": {
-        "function": lambda s1, s2, **kw: lingo_similarity(s1, s2, q=3, **kw),
+        "function": lambda s1, s2, **kw: lingo_similarity(s1, s2, **{**{"q": 3}, **kw}),
         "description": "LINGO similarity (q=3)",
         "params": {"q": 3},
     },
     "lingo5": {
-        "function": lambda s1, s2, **kw: lingo_similarity(s1, s2, q=5, **kw),
+        "function": lambda s1, s2, **kw: lingo_similarity(s1, s2, **{**{"q": 5}, **kw}),
         "description": "LINGO similarity (q=5)",
         "params": {"q": 5},
     },
@@ -3621,7 +3630,7 @@ AVAILABLE_METHODS = {
         "params": {"q": 4, "alpha": 0.9, "beta": 0.1},
     },
     "lingo_tversky_sym": {
-        "function": lambda s1, s2, **kw: lingo_tversky_similarity(s1, s2, q=4, alpha=0.5, beta=0.5, **kw),
+        "function": lambda s1, s2, **kw: lingo_tversky_similarity(s1, s2, **{**{"q": 4, "alpha": 0.5, "beta": 0.5}, **kw}),
         "description": "Symmetric Tversky (alpha=beta=0.5, equivalent to Dice) on LINGO q-grams",
         "params": {"q": 4, "alpha": 0.5, "beta": 0.5},
     },
@@ -3646,52 +3655,62 @@ AVAILABLE_METHODS = {
         "params": {"q": 4},
     },
     "spectrum": {
-        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=4, coefficient="tanimoto", **kw),
+        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, **{**{"k": 4, "coefficient": "tanimoto"}, **kw}),
         "description": "Spectrum kernel (k=4, Tanimoto) — classical fixed-k string kernel",
         "params": {"k": 4, "coefficient": "tanimoto"},
     },
     "spectrum3": {
-        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=3, coefficient="tanimoto", **kw),
+        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, **{**{"k": 3, "coefficient": "tanimoto"}, **kw}),
         "description": "Spectrum kernel (k=3, Tanimoto)",
         "params": {"k": 3, "coefficient": "tanimoto"},
     },
     "spectrum5": {
-        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=5, coefficient="tanimoto", **kw),
+        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, **{**{"k": 5, "coefficient": "tanimoto"}, **kw}),
         "description": "Spectrum kernel (k=5, Tanimoto)",
         "params": {"k": 5, "coefficient": "tanimoto"},
     },
     "spectrum_cosine": {
-        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=4, coefficient="cosine", **kw),
+        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, **{**{"k": 4, "coefficient": "cosine"}, **kw}),
         "description": "Spectrum kernel (k=4, cosine normalisation)",
         "params": {"k": 4, "coefficient": "cosine"},
     },
     "spectrum_tversky": {
-        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=4, coefficient="tversky", alpha=0.9, beta=0.1, **kw),
+        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(
+            s1, s2, **{**{"k": 4, "coefficient": "tversky", "alpha": 0.9, "beta": 0.1}, **kw}
+        ),
         "description": "Asymmetric Tversky on spectrum k-mers (k=4, alpha=0.9, beta=0.1) — query-weighted",
         "params": {"k": 4, "coefficient": "tversky", "alpha": 0.9, "beta": 0.1},
     },
     "spectrum_tversky_sym": {
-        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=4, coefficient="tversky", alpha=0.5, beta=0.5, **kw),
+        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(
+            s1, s2, **{**{"k": 4, "coefficient": "tversky", "alpha": 0.5, "beta": 0.5}, **kw}
+        ),
         "description": "Symmetric Tversky (alpha=beta=0.5, equivalent to multiset Dice) on spectrum k-mers (k=4)",
         "params": {"k": 4, "coefficient": "tversky", "alpha": 0.5, "beta": 0.5},
     },
     "spectrum_overlap": {
-        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, k=4, coefficient="overlap", **kw),
+        "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, **{**{"k": 4, "coefficient": "overlap"}, **kw}),
         "description": "Overlap coefficient (intersection / min) on spectrum k-mers (k=4) — robust to size-mismatched pairs",
         "params": {"k": 4, "coefficient": "overlap"},
     },
     "mismatch": {
-        "function": lambda s1, s2, **kw: mismatch_kernel_similarity(s1, s2, k=4, m=1, coefficient="tanimoto", **kw),
+        "function": lambda s1, s2, **kw: mismatch_kernel_similarity(
+            s1, s2, **{**{"k": 4, "m": 1, "coefficient": "tanimoto"}, **kw}
+        ),
         "description": "Mismatch (spectrum-(k,m)) kernel (k=4, m=1, Tanimoto) — tolerates 1 atom swap",
         "params": {"k": 4, "m": 1, "coefficient": "tanimoto"},
     },
     "mismatch3": {
-        "function": lambda s1, s2, **kw: mismatch_kernel_similarity(s1, s2, k=3, m=1, coefficient="tanimoto", **kw),
+        "function": lambda s1, s2, **kw: mismatch_kernel_similarity(
+            s1, s2, **{**{"k": 3, "m": 1, "coefficient": "tanimoto"}, **kw}
+        ),
         "description": "Mismatch kernel (k=3, m=1, Tanimoto)",
         "params": {"k": 3, "m": 1, "coefficient": "tanimoto"},
     },
     "mismatch5": {
-        "function": lambda s1, s2, **kw: mismatch_kernel_similarity(s1, s2, k=5, m=1, coefficient="tanimoto", **kw),
+        "function": lambda s1, s2, **kw: mismatch_kernel_similarity(
+            s1, s2, **{**{"k": 5, "m": 1, "coefficient": "tanimoto"}, **kw}
+        ),
         "description": "Mismatch kernel (k=5, m=1, Tanimoto)",
         "params": {"k": 5, "m": 1, "coefficient": "tanimoto"},
     },
@@ -3711,7 +3730,7 @@ AVAILABLE_METHODS = {
         "params": {},
     },
     "monge_elkan_sym": {
-        "function": lambda s1, s2, **kw: monge_elkan_similarity(s1, s2, bidirectional=True, **kw),
+        "function": lambda s1, s2, **kw: monge_elkan_similarity(s1, s2, **{**{"bidirectional": True}, **kw}),
         "description": "Symmetric Monge-Elkan (average of both directions)",
         "params": {"bidirectional": True},
     },
@@ -3721,12 +3740,12 @@ AVAILABLE_METHODS = {
         "params": {"n": 3, "lam": 0.5},
     },
     "subsequence2": {
-        "function": lambda s1, s2, **kw: subsequence_kernel_similarity(s1, s2, n=2, lam=0.5, **kw),
+        "function": lambda s1, s2, **kw: subsequence_kernel_similarity(s1, s2, **{**{"n": 2, "lam": 0.5}, **kw}),
         "description": "Gap-weighted subsequence string kernel (n=2, lambda=0.5)",
         "params": {"n": 2, "lam": 0.5},
     },
     "subsequence4": {
-        "function": lambda s1, s2, **kw: subsequence_kernel_similarity(s1, s2, n=4, lam=0.5, **kw),
+        "function": lambda s1, s2, **kw: subsequence_kernel_similarity(s1, s2, **{**{"n": 4, "lam": 0.5}, **kw}),
         "description": "Gap-weighted subsequence string kernel (n=4, lambda=0.5)",
         "params": {"n": 4, "lam": 0.5},
     },
@@ -4459,9 +4478,10 @@ def compute_cross_similarity_matrix(templates: List[str], library: List[str], me
         for i in range(n_lib):
             lf = lfeats[i]
             for j in range(n_templates):
-                # Argument order matches sim_func(lib, template): for asymmetric
-                # methods (query-weighted Tversky) the library molecule is the query.
-                sim_matrix[i, j] = combine(lf, tfeats[j])
+                # Argument order matches sim_func(template, lib): for asymmetric
+                # methods (query-weighted Tversky) the template is the query, per
+                # lingo_tversky_similarity's own docstring and the paper it cites.
+                sim_matrix[i, j] = combine(tfeats[j], lf)
         return sim_matrix
 
     # General path: per-pair evaluation, corpus preprocessed once up front.
@@ -4483,7 +4503,9 @@ def compute_cross_similarity_matrix(templates: List[str], library: List[str], me
 
     for i, lib_smiles in enumerate(library):
         for j, template_smiles in enumerate(templates):
-            sim = sim_func(lib_smiles, template_smiles, **filtered_kwargs)
+            # template is the query (first arg) for asymmetric methods; see the
+            # matching comment in the fast path above.
+            sim = sim_func(template_smiles, lib_smiles, **filtered_kwargs)
             sim_matrix[i, j] = sim
 
     return sim_matrix

@@ -721,7 +721,7 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `--database DATABASE`         | `-d`  | Database/library file or directory (.smi, .csv, .tsv)                                                                                               |
 | `--output OUTPUT`             | `-o`  | Output CSV file path                                                                                                                                |
 | `--method METHOD`             | `-m`  | Similarity method (default: `lingo`)                                                                                                                |
-| `--all-methods`               |       | Run all methods; output named `METHOD_output.csv`                                                                                                   |
+| `--all-methods`               |       | Run all methods; one gzipped output per method, named `<output-stem>__<method>.csv.gz`                                                              |
 | `--list-methods`              |       | Print all available methods and exit                                                                                                                |
 | `--demo`                      |       | Run a demonstration with example molecules and exit                                                                                                 |
 | `--canonicalize`              |       | **[normalize]** Canonicalize SMILES with RDKit (SMILES only, requires rdkit)                                                                        |
