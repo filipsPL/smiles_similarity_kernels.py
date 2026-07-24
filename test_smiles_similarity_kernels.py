@@ -2425,6 +2425,7 @@ class TestAvailableFingerprints:
         "phasmifp_normalized",
         "phasmifp12",
         "phasmifp12_binary",
+        "coral_global",
     }
 
     def test_all_fingerprints_registered(self):
@@ -2745,3 +2746,156 @@ def test_pharmacophoric_fingerprint_canonicalize_opt_out():
     fp12_raw = m.get_fingerprint_function("phasmifp12")(non_canonical, canonicalize=False)
     assert (fp12_raw == raw_direct).all()
     assert fp12_canon.shape == fp12_raw.shape == (12,)
+
+
+# ---------------------------------------------------------------------------
+# 21. CORAL global attribute fingerprint
+# ---------------------------------------------------------------------------
+
+
+class TestCoralGlobalFingerprint:
+    NAMES = m.coral_global_feature_names()
+
+    def _named(self, smiles, **kw):
+        fp = m.coral_global_fingerprint(smiles, **kw)
+        return {n for n, v in zip(self.NAMES, fp) if v}
+
+    def test_shape(self):
+        fp = m.coral_global_fingerprint("CCO")
+        assert fp.shape == (31,)
+
+    def test_dtype_float64(self):
+        fp = m.coral_global_fingerprint("CCO")
+        assert fp.dtype == float
+
+    def test_binary_valued(self):
+        fp = m.coral_global_fingerprint("ClC(=O)Nc1ccc(F)cc1")
+        assert set(fp.tolist()).issubset({0.0, 1.0})
+
+    def test_determinism(self):
+        fp1 = m.coral_global_fingerprint("CC(=O)Oc1ccccc1C(=O)O")
+        fp2 = m.coral_global_fingerprint("CC(=O)Oc1ccccc1C(=O)O")
+        assert (fp1 == fp2).all()
+
+    def test_feature_names_length_and_order(self):
+        names = m.coral_global_feature_names()
+        assert len(names) == 31
+        assert names[0] == "bond_double"
+        assert names[1] == "bond_triple"
+        assert names[2] == "bond_stereo"
+        assert names[3:7] == ["has_N", "has_O", "has_S", "has_P"]
+        assert names[7:10] == ["has_F", "has_Cl", "has_Br"]
+        assert names[10] == "pair_F_Cl"
+        assert names[-1] == "pair_S_P"
+
+    def test_no_features_all_zero(self):
+        # Alkane: no N/O/S/P, no halogens, no multiple bonds, no stereo.
+        assert self._named("CCCC") == set()
+        assert (m.coral_global_fingerprint("CCCC") == 0).all()
+
+    def test_double_bond_and_oxygen_only(self):
+        # Acetone: only bond_double and has_O should fire; no pair bits
+        # (only one of the 7 atompair elements is present).
+        assert self._named("CC(=O)C") == {"bond_double", "has_O"}
+
+    def test_halogen_plus_two_heteroatoms(self):
+        # Chloroacetamide-like fragment: N, O and Cl co-occur, so all three
+        # pairwise combinations among them should be set.
+        assert self._named("ClC(=O)N") == {
+            "bond_double",
+            "has_N",
+            "has_O",
+            "has_Cl",
+            "pair_Cl_N",
+            "pair_Cl_O",
+            "pair_N_O",
+        }
+
+    def test_triple_bond_and_stereocenter(self):
+        on = self._named("C#CC[C@H](N)O")
+        assert "bond_triple" in on
+        assert "bond_stereo" in on
+        assert "has_N" in on
+        assert "has_O" in on
+        assert "pair_N_O" in on
+        assert "bond_double" not in on
+
+    def test_preprocess_required_for_multichar_halogens(self):
+        # Without preprocessing, "Cl"/"Br" are two raw characters; the
+        # fingerprint scans for the *preprocessed* single-character tokens
+        # ('L'/'R'), so has_Cl/has_Br must not fire when preprocess=False.
+        on_raw = self._named("ClCCBr", preprocess=False)
+        on_pre = self._named("ClCCBr", preprocess=True)
+        assert "has_Cl" not in on_raw
+        assert "has_Br" not in on_raw
+        assert {"has_Cl", "has_Br", "pair_Cl_Br"} <= on_pre
+
+    def test_empty_smiles(self):
+        fp = m.coral_global_fingerprint("")
+        assert fp.shape == (31,)
+        assert (fp == 0).all()
+
+    def test_registered_in_available_fingerprints(self):
+        assert "coral_global" in m.AVAILABLE_FINGERPRINTS
+        assert m.AVAILABLE_FINGERPRINTS["coral_global"]["length"] == 31
+
+    def test_compute_fingerprint_matrix_integration(self):
+        smiles = ["CCO", "CCC", "ClC(=O)N", "c1ccccc1"]
+        mat, feat = m.compute_fingerprint_matrix(smiles, fp_type="coral_global")
+        assert mat.shape == (4, 31)
+        assert len(feat) == 31
+
+    def test_tanimoto_similarity_smoke(self):
+        # No dedicated similarity function is registered for coral_global
+        # (mirroring PhaSMIfp, which also has no AVAILABLE_METHODS entry);
+        # a downstream caller would compute this directly from the vectors.
+        fp1 = m.coral_global_fingerprint("ClC(=O)Nc1ccccc1")
+        fp2 = m.coral_global_fingerprint("Clc1ccc(N)cc1")
+
+        def tanimoto(a, b):
+            dot = np.dot(a, b)
+            return dot / (np.dot(a, a) + np.dot(b, b) - dot)
+
+        sim_ab = tanimoto(fp1, fp2)
+        sim_ba = tanimoto(fp2, fp1)
+        assert 0.0 <= sim_ab <= 1.0
+        assert sim_ab == pytest.approx(sim_ba)
+
+
+@pytest.mark.skipif(not DATABASE_SMI.exists(), reason="example database.smi not found")
+class TestCoralGlobalCli:
+    def test_coral_global_cli(self, tmp_path):
+        out = tmp_path / "fp_coral.csv"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--fingerprint",
+                "coral_global",
+                "--database",
+                str(DATABASE_SMI),
+                "--output",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert out.exists()
+        import csv
+
+        with open(out) as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) > 0
+        assert "Name" in rows[0]
+        assert "bit_0" in rows[0]
+        assert len(rows[0]) == 32  # Name + 31 bits
+
+    def test_coral_global_listed_in_cli(self):
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).parent / "smiles_similarity_kernels.py"), "--list-fingerprints"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "coral_global" in result.stdout

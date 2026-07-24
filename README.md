@@ -604,6 +604,57 @@ fp = bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=512)  # fixed 512-bit
 fp = bpe_pattern_fingerprint("CC(=O)Nc1ccccc1", num_merges=512, binary=True)
 ```
 
+### PhaSMIfp fingerprint
+
+A 78D pharmacophoric fingerprint derived entirely from the SMILES string via the Schwaller atom-level tokenizer — no training data or fitting step required. It complements SMIfp (raw character counts) and the BPE fingerprint (local multi-atom fragments) by encoding coarse pharmacophoric roles and their co-occurrence.
+
+**Layout:**
+
+- **[0:12]** — 12D per-class counts over a fixed pharmacophoric alphabet: `D` (H-bond donor), `A` (acceptor), `R` (aromatic atom), `T` (sp3 carbon), `L` (lipophilic run), `P` (positive ionizable), `M` (negative ionizable), `Q` (quaternary N+), `E` (carbonyl), `X` (halogen), `S` (sulfur), `G` (ring closure)
+- **[12:78]** — 66D pairwise co-occurrence, `min(count_i, count_j)` for every unique class pair, `C(12,2) = 66`
+
+Detection uses per-token heuristics (not a full valence/connectivity model); see the `_compute_pharmacophore_counts` docstring in the source for the exact rule per class. By default, input is RDKit-canonicalized before counting (`canonicalize=True`) so that different valid SMILES for the same molecule produce identical vectors — set `canonicalize=False` to count on the input string as given (e.g. shuffled/negative-control inputs, or non-SMILES representations).
+
+| Type                | CLI name              | Dimensions | Values                              |
+| ------------------- | ---------------------- | ---------- | ------------------------------------ |
+| Count (default)     | `phasmifp`             | 78         | per-class + pairwise counts          |
+| Binary              | `phasmifp_binary`      | 78         | 0/1 presence                         |
+| Normalized          | `phasmifp_normalized`  | 78         | counts divided by the 12D count sum  |
+| 12D count only      | `phasmifp12`           | 12         | per-class counts, no pairwise layer  |
+| 12D binary only     | `phasmifp12_binary`    | 12         | 0/1 presence, no pairwise layer      |
+
+```python
+from smiles_similarity_kernels import pharmacophoric_fingerprint, get_pharmacophoric_feature_names
+
+fp = pharmacophoric_fingerprint("CC(=O)Nc1ccc(O)cc1")        # 78D count
+fp_bin = pharmacophoric_fingerprint("CCO", output="binary")  # 78D binary
+names = get_pharmacophoric_feature_names()                   # ['pharm_D', ..., 'pharm_SG']
+```
+
+### CORAL global attribute fingerprint
+
+A 31D binary presence vector encoding coarse, whole-molecule compositional facts — bond types, heteroatoms, halogens, and their pairwise co-occurrence — inspired by the "global SMILES attributes" (BOND, NOSP, HALO, ATOMPAIR) used in the CORAL QSAR software:
+
+> Toropov, A.A. et al. CORAL: QSAR models for estrogen receptor binding affinity of hydroxylated polychlorinated biphenyls. *J. Comput. Chem.* 2011, 32, 2727–2733.
+
+Unlike the original CORAL descriptor — which fits Monte Carlo correlation weights against an activity endpoint — this reimplementation is a fixed, unsupervised, corpus-free presence vector only; no correlation weighting or optimization step is performed.
+
+**Layout (31 bits):**
+
+| Block      | Bits | Content                                                             |
+| ---------- | ---- | -------------------------------------------------------------------- |
+| BOND       | 3    | double (`=`), triple (`#`), stereo (`@`) bond presence                |
+| NOSP       | 4    | heteroatom presence: N, O, S, P                                       |
+| HALO       | 3    | halogen presence: F, Cl, Br                                          |
+| ATOMPAIR   | 21   | pairwise co-occurrence of the 7 NOSP/HALO elements, `C(7,2)` combinations |
+
+```python
+from smiles_similarity_kernels import coral_global_fingerprint, coral_global_feature_names
+
+fp = coral_global_fingerprint("ClC(=O)Nc1ccccc1")  # 31D binary vector
+names = coral_global_feature_names()               # ['bond_double', ..., 'pair_S_P']
+```
+
 ### Batch fingerprints
 
 ```python
@@ -635,6 +686,19 @@ python smiles_similarity_kernels.py \
     --database examples/database.smi \
     --output fingerprints_bpe.csv
 
+# PhaSMIfp 78D pharmacophoric fingerprint (canonicalize recommended, requires rdkit)
+python smiles_similarity_kernels.py \
+    --fingerprint phasmifp \
+    --canonicalize \
+    --database examples/database.smi \
+    --output fingerprints_phasmifp.csv
+
+# CORAL-style global attribute fingerprint (31D binary)
+python smiles_similarity_kernels.py \
+    --fingerprint coral_global \
+    --database examples/database.smi \
+    --output fingerprints_coral.csv
+
 # List all available fingerprint types
 python smiles_similarity_kernels.py --list-fingerprints
 ```
@@ -665,6 +729,12 @@ python smiles_similarity_kernels.py --list-fingerprints
 | `bpe_binary`     | all merges | BPE-pattern binary (all merges in vocab)                |
 | `bpe{k}_count`   | k          | BPE-pattern count, k ∈ {16,32,64,128,256,512,1024}      |
 | `bpe{k}_binary`  | k          | BPE-pattern binary, k ∈ {16,32,64,128,256,512,1024}     |
+| `phasmifp`             | 78 | PhaSMIfp pharmacophoric hologram (12D class counts + 66D pairwise co-occurrence, count) |
+| `phasmifp_binary`      | 78 | PhaSMIfp pharmacophoric hologram (binary presence/absence) |
+| `phasmifp_normalized`  | 78 | PhaSMIfp pharmacophoric hologram (normalized float) |
+| `phasmifp12`           | 12 | PhaSMIfp 12D class count vector only (no pairwise layer) |
+| `phasmifp12_binary`    | 12 | PhaSMIfp 12D class binary vector only (no pairwise layer) |
+| `coral_global`   | 31         | CORAL-style global attribute presence vector (bond/heteroatom/halogen/pair) |
 
 ## Batch Processing
 

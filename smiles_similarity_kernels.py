@@ -97,6 +97,7 @@ import heapq
 import warnings
 import argparse
 import functools
+import itertools
 import numpy as np
 import pandas as pd
 from collections import Counter
@@ -3410,6 +3411,99 @@ def pharmacophoric_fingerprint(
         return fp_78
 
 
+# ============================================================================
+# CORAL global attribute fingerprint
+# ============================================================================
+#
+# Presence/absence indicators inspired by the "global SMILES attributes"
+# (BOND, NOSP, HALO, ATOMPAIR) used in the CORAL QSAR software (Toropov &
+# Toropova et al., J Comput Chem 2011, 32:2727).  Reimplemented here as a
+# fixed, corpus-free presence vector -- CORAL's own Monte Carlo correlation
+# weighting is out of scope for this module.
+#
+# Halogen tokens are given in their *preprocessed* single-character form
+# (see ELEMENT_REPLACEMENTS): Cl -> 'L', Br -> 'R'.  The '@' bond-stereo bit
+# only fires for a lone '@' surviving preprocessing (the anticlockwise
+# marker); '@@' and the named stereo forms (@TH1, @OH, ...) are rewritten to
+# their own sentinel characters by preprocess_smiles and are therefore not
+# matched by this bit -- the same documented limitation as the '@' slot in
+# SMIFP_CHARS_34.
+CORAL_BOND_CHARS = ["=", "#", "@"]  # double bond, triple bond, stereo marker
+CORAL_NOSP_ELEMENTS = ["N", "O", "S", "P"]  # heteroatoms
+CORAL_HALO_ELEMENTS = ["F", ELEMENT_REPLACEMENTS["Cl"], ELEMENT_REPLACEMENTS["Br"]]  # F, Cl, Br
+CORAL_ATOMPAIR_ELEMENTS = CORAL_HALO_ELEMENTS + CORAL_NOSP_ELEMENTS  # F, Cl, Br, N, O, S, P (halo then nosp order)
+
+# Human-readable labels for CORAL_ATOMPAIR_ELEMENTS, same order, used only for feature names.
+_CORAL_ATOMPAIR_DISPLAY = ["F", "Cl", "Br", "N", "O", "S", "P"]
+
+
+def coral_global_fingerprint(smiles: str, preprocess: bool = True) -> np.ndarray:
+    """
+    CORAL-style global attribute fingerprint (binary, corpus-free).
+
+    Encodes presence/absence of:
+      - bond types: double (=), triple (#), stereo (@)          [3 bits]
+      - heteroatoms: N, O, S, P                                  [4 bits]
+      - halogens: F, Cl, Br                                      [3 bits]
+      - heteroatom/halogen co-occurrence pairs (C(7,2))          [21 bits]
+    Total dimensionality: 31.
+
+    Unlike SMIfp (character counts) or the BPE-pattern fingerprint (local
+    multi-atom fragments), this fingerprint captures coarse, whole-molecule
+    compositional facts, motivated by the global SMILES attributes (BOND,
+    NOSP, HALO, ATOMPAIR) used in the CORAL QSAR software (Toropov &
+    Toropova et al., e.g. J Comput Chem 2011, 32:2727). Unlike the original
+    CORAL descriptor, no correlation weights are fitted here -- this is the
+    fixed, unsupervised global composition vector only.
+
+    Deterministic and corpus-free: computed from a single molecule, no
+    dataset fitting required -- consistent with the other fingerprints in
+    this module.
+
+    Parameters
+    ----------
+    smiles : str
+        Input SMILES string.
+    preprocess : bool, default True
+        Apply preprocess_smiles() before scanning, so multi-character
+        halogen tokens (Cl, Br) are matched as single units. Set False for
+        non-SMILES inputs (InChI/SELFIES), matching smifp_fingerprint's
+        convention.
+
+    Returns
+    -------
+    np.ndarray, shape (31,), dtype float64
+        Binary (0.0/1.0) presence vector.
+    """
+    if preprocess:
+        smiles = preprocess_smiles(smiles)
+
+    bond_bits = [1.0 if ch in smiles else 0.0 for ch in CORAL_BOND_CHARS]
+    nosp_bits = [1.0 if el in smiles else 0.0 for el in CORAL_NOSP_ELEMENTS]
+    halo_bits = [1.0 if el in smiles else 0.0 for el in CORAL_HALO_ELEMENTS]
+
+    presence = halo_bits + nosp_bits  # matches CORAL_ATOMPAIR_ELEMENTS order
+    pair_bits = [
+        1.0 if presence[i] and presence[j] else 0.0
+        for i, j in itertools.combinations(range(len(CORAL_ATOMPAIR_ELEMENTS)), 2)
+    ]
+
+    return np.array(bond_bits + nosp_bits + halo_bits + pair_bits, dtype=float)
+
+
+def coral_global_feature_names() -> List[str]:
+    """
+    Return the 31 human-readable feature names for coral_global_fingerprint,
+    in the same order as the vector it produces.
+    """
+    names = ["bond_double", "bond_triple", "bond_stereo"]
+    names += [f"has_{el}" for el in CORAL_NOSP_ELEMENTS]
+    names += [f"has_{el}" for el in _CORAL_ATOMPAIR_DISPLAY[:3]]  # F, Cl, Br
+    for i, j in itertools.combinations(range(len(_CORAL_ATOMPAIR_DISPLAY)), 2):
+        names.append(f"pair_{_CORAL_ATOMPAIR_DISPLAY[i]}_{_CORAL_ATOMPAIR_DISPLAY[j]}")
+    return names
+
+
 # ---------------------------------------------------------------------------
 # Fingerprint registry
 # ---------------------------------------------------------------------------
@@ -3512,6 +3606,13 @@ AVAILABLE_FINGERPRINTS: Dict[str, dict] = {
         ).astype(float),
         "description": "PhaSMIfp 12D pharmacophoric class binary vector only (no pairwise layer)",
         "length": 12,
+        "params": {},
+    },
+    # ── CORAL global attribute fingerprint ──────────────────────────────────
+    "coral_global": {
+        "function": coral_global_fingerprint,
+        "description": "CORAL-style global attribute presence vector (bond/heteroatom/halogen/pair, binary)",
+        "length": 31,
         "params": {},
     },
 }
