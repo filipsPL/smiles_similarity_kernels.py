@@ -92,8 +92,8 @@ This module provides **259 similarity methods** for comparing chemical compounds
                                             override with --no-preprocess
     ↓
 [AUGMENT] Applied to the final string, type-agnostic
-          --shuffle [--shuffle-seed SEED] → random character shuffle (negative control)
-          --sort                          → alphabetical character sort (deterministic negative control)
+          --shuffle [--shuffle-seed SEED] → random character shuffle (ordering ablation)
+          --sort                          → alphabetical character sort (deterministic ordering ablation)
     ↓
 [SIMILARITY] All 259 methods available for all string types
 ```
@@ -201,12 +201,12 @@ python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
     --output examples/output.csv --method tok-selfies_tfidf44 --selfies
 
-# Shuffle SMILES characters — random negative control
+# Shuffle SMILES characters — ordering ablation (order destroyed, composition kept)
 python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
     --output examples/output.csv --method lingo --shuffle --shuffle-seed 42
 
-# Sort SMILES characters alphabetically — deterministic negative control
+# Sort SMILES characters alphabetically — deterministic ordering ablation
 python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
     --output examples/output.csv --method lingo --sort
@@ -240,11 +240,15 @@ Name,Similarity_0054-0090,Similarity_0133-0086
 | `substring`        | `substring_kernel_similarity` | Substring kernel: normalized inner product of all-substring frequency vectors | —        |
 | `smifp_cbd`        | `smifp_similarity_cityblock`  | SMILES fingerprint 34D, City Block Distance: 1/(1+CBD)                        | scipy    |
 | `smifp_tanimoto`   | `smifp_similarity_tanimoto`   | SMILES fingerprint 34D, Tanimoto coefficient                                  | —        |
-| `smifp38_cbd`      | `smifp_similarity_cityblock`  | SMILES fingerprint 38D (+ `/`, `\`, `@@`), City Block Distance                | scipy    |
+| `smifp38_cbd`      | `smifp_similarity_cityblock`  | SMILES fingerprint 38D (+ `/`, `\`, `@@`, Cl/Br sentinels), City Block Distance | scipy    |
 | `smifp38_tanimoto` | `smifp_similarity_tanimoto`   | SMILES fingerprint 38D, Tanimoto coefficient                                  | —        |
-| `lingo`            | `lingo_similarity`            | LINGO q-gram Tanimoto, q=4 (default)                                          | —        |
-| `lingo3`           | `lingo_similarity`            | LINGO q-gram Tanimoto, q=3                                                    | —        |
-| `lingo5`           | `lingo_similarity`            | LINGO q-gram Tanimoto, q=5                                                    | —        |
+| `lingo`            | `lingo_similarity`            | LINGOsim (mean per-q-gram agreement ratio; not Tanimoto or Dice — see note below), q=4 (default) | —        |
+| `lingo3`           | `lingo_similarity`            | LINGOsim, q=3                                                                 | —        |
+| `lingo5`           | `lingo_similarity`            | LINGOsim, q=5                                                                 | —        |
+
+> **LINGOsim naming note:** `lingo`/`lingo3`/`lingo5` (Vidal, Thormann & Pons 2005) are commonly described as "Tanimoto-like" (Öztürk et al. 2016 does this too), but the formula is an unweighted **mean, over unique q-grams, of a per-q-gram agreement ratio** — not a single intersection-over-union/sum computed once over the whole count vector, which is what Tanimoto and Dice actually are. For an actual Tanimoto/Dice on the same q-grams, use `lingo_ruzicka`/`lingo_dice` (below) instead.
+
+> **Ring-digit normalization is SMILES-only:** every LINGO-family method blanks ring-closure digits to `0` before extracting q-grams, as Öztürk et al. (2016) specify. That is meaningful only for SMILES — elsewhere a digit is not a ring label. An InChI has no bracket atoms to exempt and its connection layer is almost nothing but digits, so blanking them deletes the representation's content: benzene's `C6H6/c1-2-4-6-5-3-1/h1-6H` and pyridine's `C5H5N/c1-2-4-6-5-3-1/h1-5H` collapse to the *same* connection string `/c0-0-0-0-0-0-0`, and aspirin-vs-caffeine scored 0.33 instead of 0.018. All LINGO functions therefore take `normalize_rings=` (default `True`), and the CLI sets it to `False` automatically under `--inchi`/`--selfies`, exactly as it already does for `ELEMENT_REPLACEMENTS` preprocessing — `--verbose` reports when it does. SMILES results are unchanged. If you call these functions directly on InChI/SELFIES strings from Python, pass `normalize_rings=False` yourself (alongside `preprocess=False`). `spectrum`/`mismatch` expose the same flag but already default to `False`, so they were never affected.
 
 ### LINGO variants with alternative coefficients (extensions)
 
@@ -269,6 +273,8 @@ Motivated by [our paper](https://doi.org/10.1093/bib/bbaf620) where query-weight
 
 Classical string-kernel methods from the biological-sequence literature, ported to SMILES. `spectrum`/`spectrum3`/`spectrum5`/`spectrum_cosine` return a single inner-product-based coefficient (Tanimoto, Dice, or cosine) over the full k-mer count vector. `spectrum_tversky`/`spectrum_tversky_sym`/`spectrum_overlap` instead use multiset intersection arithmetic (min/max of k-mer counts, the same mechanism as `lingo_tversky`) — a mathematically distinct normalisation from the dot-product coefficients, not a rename of `spectrum_cosine`/`_dice`.
 
+> **"Tanimoto" naming note:** `spectrum`'s `'tanimoto'` coefficient is `dot / (‖A‖² + ‖B‖² − dot)` computed on *count* vectors — the extended/Gower Tanimoto-Jaccard coefficient. This is a distinct quantity from the *binary* Tanimoto coefficient (set intersection/union with no multiplicities, as used by `lingo_jaccard_binary`) and from `lingo_ruzicka`'s multiset Jaccard (`Σmin/Σmax` over k-mer counts) — the three only coincide when no k-mer repeats within either sequence.
+
 | CLI name               | Function                              | Description                                                                          | Requires |
 | ---------------------- | -------------------------------------- | ------------------------------------------------------------------------------------ | -------- |
 | `spectrum`             | `spectrum_kernel_similarity`          | **Spectrum kernel** (Leslie et al. 2002), k=4, Tanimoto                              | —        |
@@ -292,6 +298,8 @@ Classical string-kernel methods from the biological-sequence literature, ported 
 
 > **Subsequence-kernel note:** `subsequence` matches length-`n` subsequences whose characters need **not** be contiguous, weighting each occurrence by `λ^span` (span = last − first index + 1) so that gappy matches count for less — capturing scaffolds interrupted by substituents. It is cosine-normalised to [0, 1] via `K(S1,S2)/√(K(S1,S1)·K(S2,S2))`. Cost is `O(n·|S1|·|S2|)` per pair (a full DP, like `edit`/`nlcs`); `λ` and `n` are tunable via the function. The efficient DP (Lodhi et al. 2002) is verified against a brute-force enumeration of the kernel definition in the test suite.
 
+> **"Kernel" / PSD note:** several methods here are called kernels because they follow the mathematical construction of one (`spectrum`, `mismatch`, `subsequence`, `substring`), but the *coefficients* built on top (Tanimoto/Dice/Tversky/overlap-normalised versions, and the asymmetric query-weighted Tversky variants in particular) are not guaranteed positive semi-definite. That is fine for ranking/similarity search, which is this module's use case, but do not plug them directly into a kernel SVM or other method that requires a valid Mercer kernel without checking PSD-ness first — only the raw, un-normalised inner product (`normalized=False` where offered) carries that guarantee. `mismatch_kernel_similarity`'s own validity additionally depends on using one *fixed* alphabet across every pair being compared (see the note in `compute_similarity_matrix`'s docstring, and `corpus_alphabet()`) — the batch helpers set this up automatically, but a bare `mismatch_kernel_similarity(a, b)` call without a supplied `alphabet=` derives one from just that pair, which is only a valid kernel feature map in isolation, not across a library.
+
 ### TF-IDF (extensions)
 
 Four tokenizer-backed TF-IDF families, each covering the full n-gram grid m∈{1..6}, n∈{m..6} (21 combinations per family):
@@ -308,6 +316,8 @@ Four tokenizer-backed TF-IDF families, each covering the full n-gram grid m∈{1
 | `tok-bpe{k}_tfidf{m}{n}`    | `bpe_tfidf_similarity`       | `SMILESTokenizerBPE`       | BPE TF-IDF using first k merges, ngram (m, n); e.g. `tok-bpe64_tfidf44` | scikit-learn |
 | `tok-selfies_tfidf`         | `selfies_tfidf_similarity`   | `SELFIESTokenizer`         | Alias for `tok-selfies_tfidf12` (default n-gram range)                  | scikit-learn |
 | `tok-selfies_tfidf{m}{n}`   | `selfies_tfidf_similarity`   | `SELFIESTokenizer`         | SELFIES-token TF-IDF, ngram (m, n); e.g. `tok-selfies_tfidf44`          | scikit-learn |
+
+> **Short molecules and the n-gram floor:** a molecule with fewer tokens than `m` has no representable n-gram at all — under the recommended `(4,4)` range, a 3-token fragment like `CCO` produces an all-zero TF-IDF vector. The cosine of two zero vectors is 0/0, which sklearn reports as `0.0`, so such a molecule used to score `0.0` against *itself*, and the per-pair function, the square matrix (whose diagonal is force-set to `1.0`) and the cross matrix each gave a different answer for the same pair. All three now apply the same degenerate-case convention used elsewhere in the module — compare the strings, equal → `1.0`, otherwise `0.0` (the same rule as LINGO's "both shorter than q" branch) — and only zero-vector × zero-vector cells are affected, so no ordinary score changes. This matters for fragment libraries and nucleoside-sized starting points: if a large share of a library falls below the floor, prefer a lower `m` rather than relying on the convention.
 
 **Tokenizers:**
 
@@ -391,23 +401,27 @@ tok.tokenize(selfies)
 # → ['[C]', '[C]', '[=Branch1]', '[C]', '[=O]', '[O]', ...]
 ```
 
-CLI: pass `--selfies` alongside any `--method`. `ELEMENT_REPLACEMENTS` substitution is automatically disabled for SELFIES (and InChI) — it only runs for SMILES. Works with all methods (see `--list-methods` for the current count).
+CLI: pass `--selfies` alongside any `--method`. `ELEMENT_REPLACEMENTS` substitution is automatically disabled for SELFIES (and InChI) — it only runs for SMILES. LINGO ring-digit normalization is disabled for the same reason and by the same rule (see the note in the LINGO section above). Works with all methods (see `--list-methods` for the current count).
 
-### Negative controls: character shuffle and sort
+### Ordering ablations: character shuffle and sort
 
-Two type-agnostic augmentations are available for negative-control experiments. Both destroy chemical meaning while preserving string length and character composition.
+Two type-agnostic string transforms are available. Both destroy character *order* while preserving string length and character composition (the multiset of characters is unchanged) — **they are not a random/null baseline**, because preserving composition is exactly the point: a method's score on shuffled or sorted input is not "the score on unrelated molecules", it is "the score using composition information alone, with ordering information removed". Read that way, comparing a method's shuffled/sorted score to its normal score is an **ablation of how much of that method's signal comes from character order** versus from symbol composition — which methods are largely order-insensitive (LINGO, spectrum, SMIfp are all fairly robust to this, by construction) and which are strongly alignment-based (edit distance, NLCS, LCS, Jaro-Winkler, Hamming) separates out cleanly this way, and is a more informative result than a simple sanity check.
 
-**`--shuffle`** randomly permutes characters (with optional `--shuffle-seed` for reproducibility). Scores should approach random-pair baseline; a method scoring well above baseline likely has length bias.
+**`--shuffle`** randomly permutes characters (with optional `--shuffle-seed`, which is per-molecule — see below — for reproducibility).
 
-**`--sort`** sorts characters alphabetically — deterministic, no seed needed. Provides a fixed lower-bound baseline that is identical across runs, useful for comparing runs or methods without variance from randomness.
+**`--sort`** sorts characters alphabetically — deterministic, no seed needed. Every molecule with the same character multiset maps to the *same* sorted string, so `--sort` similarity is essentially symbol-composition similarity; it can score **higher** than the unsorted metric for molecules that share atoms but not scaffold, so it is not a lower bound on anything.
+
+`--shuffle-seed` derives each molecule's permutation from a CRC32 of that molecule's own string — as it stands at the augment stage, i.e. after any `--canonicalize`/`--inchi`/`--selfies` conversion and before `ELEMENT_REPLACEMENTS` substitution — mixed with the seed, not from the seed alone — a fixed seed applied to a whole library therefore still gives every molecule an independent permutation. (An earlier version derived the permutation from the seed and string length only, which meant every same-length molecule in a run got the *identical* permutation and kept its positional correspondence with every other same-length molecule — silently preserving alignment-based similarity, e.g. Hamming similarity is exactly invariant under a shared permutation, that the control was supposed to remove.)
+
+If what you actually want is a chance-level null distribution for enrichment/AUC claims (as opposed to an ordering ablation), that requires a different design: property-matched decoys, scaffold-split holdouts, or label y-scrambling — none of which `--shuffle`/`--sort` provide.
 
 ```bash
-# Random negative control (reproducible with seed)
+# Ordering ablation, randomised (reproducible with seed)
 python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
     --output examples/output_shuffled.csv --method lingo --shuffle --shuffle-seed 42
 
-# Deterministic negative control
+# Ordering ablation, deterministic
 python smiles_similarity_kernels.py \
     --templates examples/templates.smi --database examples/database.smi \
     --output examples/output_sorted.csv --method lingo --sort
@@ -563,10 +577,10 @@ The SMIfp fingerprint counts occurrences of a fixed character set in the preproc
 | --------------- | ---------------- | ---------- | ---------------- |
 | Count (default) | `smifp34`        | 34         | character counts |
 | Binary          | `smifp34_binary` | 34         | 0/1 presence     |
-| Extended count  | `smifp38`        | 36*        | character counts |
-| Extended binary | `smifp38_binary` | 36*        | 0/1 presence     |
+| Extended count  | `smifp38`        | 38         | character counts |
+| Extended binary | `smifp38_binary` | 38         | 0/1 presence     |
 
-*The "38D" variant removes `%` from the 34D set and adds `/`, `\`, `@@`; actual size is 36.
+The "38D" variant removes `%` from the 34D set and adds `/`, `\`, `@@`, and the Cl/Br sentinel characters — the base 34D set counts `F`/`I` as halogens but, after `preprocess_smiles` rewrites `Cl`/`Br` to single-character sentinels, has no dimension for either sentinel, so it cannot distinguish e.g. benzene from chlorobenzene or chlorobenzene from bromobenzene. The 38D set adds both sentinels precisely to fix that; the 34D set is left as a literal, character-for-character match to the original published descriptor.
 
 ```python
 from smiles_similarity_kernels import smifp_fingerprint, SMIFP_CHARS_34, SMIFP_CHARS_38
@@ -610,10 +624,14 @@ A 78D pharmacophoric fingerprint derived entirely from the SMILES string via the
 
 **Layout:**
 
-- **[0:12]** — 12D per-class counts over a fixed pharmacophoric alphabet: `D` (H-bond donor), `A` (acceptor), `R` (aromatic atom), `T` (sp3 carbon), `L` (lipophilic run), `P` (positive ionizable), `M` (negative ionizable), `Q` (quaternary N+), `E` (carbonyl), `X` (halogen), `S` (sulfur), `G` (ring closure)
+- **[0:12]** — 12D per-class counts over a fixed pharmacophoric alphabet: `D` (H-bond donor), `A` (acceptor), `R` (aromatic atom), `T` (aliphatic carbon), `L` (lipophilic run), `P` (positive ionizable), `M` (negative ionizable), `Q` (quaternary N+), `E` (carbonyl), `X` (halogen), `S` (sulfur), `G` (ring closure)
 - **[12:78]** — 66D pairwise co-occurrence, `min(count_i, count_j)` for every unique class pair, `C(12,2) = 66`
 
-Detection uses per-token heuristics (not a full valence/connectivity model); see the `_compute_pharmacophore_counts` docstring in the source for the exact rule per class. By default, input is RDKit-canonicalized before counting (`canonicalize=True`) so that different valid SMILES for the same molecule produce identical vectors — set `canonicalize=False` to count on the input string as given (e.g. shuffled/negative-control inputs, or non-SMILES representations).
+Detection uses per-token heuristics (not a full valence/connectivity model); see the `_compute_pharmacophore_counts` docstring in the source for the exact rule per class. In the Python API, input is RDKit-canonicalized before counting by default (`canonicalize=True`) so that different valid SMILES for the same molecule produce identical vectors — set `canonicalize=False` to count on the input string as given (e.g. shuffled/negative-control inputs, or non-SMILES representations). The CLI (`--fingerprint phasmifp`) canonicalizes only when `--canonicalize` is passed, mirroring similarity mode, so that the representation-ablation variants stay genuine ablations.
+
+> **Heuristic caveats worth knowing before you interpret these dimensions:** `T` counts *every* non-aromatic carbon, not only sp3 ones (Kekulé benzene `C1=CC=CC=C1` gives `T=6`) — a single token carries no hybridisation information. `L` counts maximal contiguous `C`/`c` runs in the token stream, and runs are broken by ring-closure digits and branch parentheses, so benzene scores `L=2`: it is a string-topology feature, made reproducible by canonicalization but not thereby chemical. `P`/`Q` exclude nitro and N-oxide nitrogens, which carry a formal `+` but are neither protonation sites nor permanent cations (before this exclusion, nitrobenzene had the same `P`/`Q` signature as tetramethylammonium); the nitro `[O-]` does still count toward `A` and `M`.
+
+> **Intrinsic dimensionality note:** the 66 pairwise-co-occurrence dimensions are a fixed, deterministic function of the 12 class counts (`min(count_i, count_j)`, and in `output='binary'` mode simply the pairwise AND of the 12 presence bits) — they are not 66 additional measurements. PhaSMIfp is more accurately described as a **12-dimensional pharmacophoric count vector, deterministically expanded to 78 dimensions** with pairwise interaction terms so that linear/distance-based methods can exploit feature co-occurrence without an explicit kernel. State it this way (not as "a 78D descriptor") in any paper or grant text — a reviewer checking the construction will find the same thing. Also note that the `D` (donor) and `A` (acceptor) classes are far from independent by construction: a bare, unconditional `N`/`O` token counts as both a donor and an acceptor, so on drug-like molecules `D` and `A` are typically highly correlated (Pearson r > 0.9 on small test sets) — effectively one dimension of signal split across two, not two independent one.
 
 | Type                | CLI name              | Dimensions | Values                              |
 | ------------------- | ---------------------- | ---------- | ------------------------------------ |
@@ -647,6 +665,8 @@ Unlike the original CORAL descriptor — which fits Monte Carlo correlation weig
 | NOSP       | 4    | heteroatom presence: N, O, S, P                                       |
 | HALO       | 3    | halogen presence: F, Cl, Br                                          |
 | ATOMPAIR   | 21   | pairwise co-occurrence of the 7 NOSP/HALO elements, `C(7,2)` combinations |
+
+> **Intrinsic dimensionality note:** as with PhaSMIfp above, the 21 ATOMPAIR bits are a deterministic function (pairwise AND) of the 10 BOND+NOSP+HALO presence bits, not independent measurements — CORAL is more accurately a **10-dimensional presence vector, deterministically expanded to 31 dimensions**. `has_N`/`has_O`/`has_S`/`has_P` match both the aliphatic (`N`/`O`/`S`/`P`) and aromatic (`n`/`o`/`s`/`p`) SMILES symbol, so N/O/S-heteroaromatics (pyridine, furan, thiophene — common in nucleic-acid-binder chemotypes) are detected correctly, not just their aliphatic forms.
 
 ```python
 from smiles_similarity_kernels import coral_global_fingerprint, coral_global_feature_names
@@ -723,8 +743,8 @@ python smiles_similarity_kernels.py --list-fingerprints
 | ---------------- | ---------- | ------------------------------------------------------- |
 | `smifp34`        | 34         | SMIfp character-frequency count                         |
 | `smifp34_binary` | 34         | SMIfp binary (presence/absence)                         |
-| `smifp38`        | 36         | SMIfp extended count (adds `/`, `\`, `@@`; removes `%`) |
-| `smifp38_binary` | 36         | SMIfp extended binary                                   |
+| `smifp38`        | 38         | SMIfp extended count (adds `/`, `\`, `@@`, Cl/Br sentinels; removes `%`) |
+| `smifp38_binary` | 38         | SMIfp extended binary                                   |
 | `bpe_count`      | all merges | BPE-pattern count (all merges in vocab)                 |
 | `bpe_binary`     | all merges | BPE-pattern binary (all merges in vocab)                |
 | `bpe{k}_count`   | k          | BPE-pattern count, k ∈ {16,32,64,128,256,512,1024}      |
@@ -799,10 +819,11 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `--inchi-layer LAYER[,...]`   |       | **[convert]** With `--inchi`, restrict to selected layer(s). Comma-separated. Default: `all`. See [InChI layer extraction](#inchi-layer-extraction) |
 | `--selfies`                   |       | **[convert]** Convert SMILES → SELFIES (requires `selfies`)                                                                                         |
 | `--no-preprocess`             |       | **[normalize]** Disable `ELEMENT_REPLACEMENTS` substitution for SMILES (auto-disabled for InChI/SELFIES). Useful for benchmarking raw strings.      |
-| `--shuffle`                   |       | **[augment]** Randomly shuffle characters — **negative control**, type-agnostic, applied after all conversions                                      |
+| `--shuffle`                   |       | **[augment]** Randomly shuffle characters — **ordering ablation** (not a null baseline: composition is preserved), type-agnostic, applied after all conversions |
 | `--shuffle-seed SEED`         |       | **[augment]** Random seed for `--shuffle` (default: non-reproducible).                                                                              |
-| `--sort`                      |       | **[augment]** Sort characters alphabetically — **deterministic negative control**, type-agnostic, applied after all conversions                     |
+| `--sort`                      |       | **[augment]** Sort characters alphabetically — **deterministic ordering ablation** (can score *higher* than the unsorted metric), type-agnostic, applied after all conversions |
 | `--verbose`, `-v`             |       | Print progress                                                                                                                                      |
+| `--jobs N`                    | `-j`  | Parallel worker processes for the general per-pair path (default `1`; `-1` = all CPUs). No effect on already-vectorized methods — see [Parallel execution](#parallel-execution---jobs) |
 | `--templates-smiles-col COL`  |       | SMILES column name/index in templates file                                                                                                          |
 | `--templates-name-col COL`    |       | Name column in templates file                                                                                                                       |
 | `--templates-delimiter DELIM` |       | Delimiter for templates file                                                                                                                        |
@@ -843,11 +864,24 @@ Batch helpers (`compute_similarity_matrix`, `compute_cross_similarity_matrix`) u
 | `lcs_substring`                                   | O(m×n)         | DP — same cost as `nlcs`                                                      |
 | `edit`, `nlcs`, `clcs`, `token_edit`              | O(m×n)         | DP — slow for long SMILES (`token_edit` over tokens, so m,n are token counts) |
 | `monge_elkan`, `monge_elkan_sym`                  | O(mA·mB·q)     | mA,mB = token counts, q = cost of the secondary token-similarity call (default: O(char-edit) per token pair) |
-| `subsequence` (n, λ)                              | O(n·m·m')      | Gap-weighted DP; self-kernels cached once per string in batch                 |
+| `subsequence` (n, λ)                              | O(n·m·m')      | Gap-weighted DP; self-kernels cached once per string in batch. Above ~16-character strings, automatically reformulated as two `scipy.signal.lfilter` calls per DP level instead of a Python loop over the string lengths (exact, not approximate — 1.4-5x faster for typical SMILES lengths; falls back to the plain Python DP below that threshold, or always if scipy is unavailable) |
 | `substring`                                       | O(m²+n²)       | Can be slow for long SMILES                                                   |
 | `smiles_tfidf{m}{n}`, `selfies_tfidf{m}{n}`       | O(corpus)      | Fit once on full corpus for batch use; cost grows with n                      |
 | `ncd`                                             | O(n log n)     | Compression overhead; fine for millions                                       |
 | jellyfish methods                                 | O(n)           | Very fast via C extension                                                     |
+
+### Parallel execution (`--jobs`)
+
+`--jobs N` (`-j`, default `1`) runs `compute_cross_similarity_matrix`'s general per-pair loop across `N` worker processes (`-1` = all CPUs), splitting the template list into column blocks. This only helps the DP-bound methods that fall through to the general per-pair path — `edit`, `nlcs`, `clcs`, `mismatch`, `token_edit`, `monge_elkan`, jellyfish-based methods, and any `tok-*_tfidf*` call whose vectorizer couldn't be fit up front. Featurize-once methods (`lingo*`, `spectrum*`, `smifp*`, `substring`, `ncd`) and the batched TF-IDF path are already vectorized/O(1)-per-pair and run sequentially regardless of `--jobs`, since spawning worker processes would only add overhead there.
+
+```bash
+# Parallelize a slow method (mismatch) over 4 worker processes
+python smiles_similarity_kernels.py \
+    --templates examples/templates.smi --database examples/database.smi \
+    --output examples/output.csv --method mismatch --jobs 4
+```
+
+Process-pool startup costs tens of milliseconds, so `--jobs` only pays off for large template × library grids on slow methods — leave it at the default for small screens or fast methods.
 
 ## Citation
 
