@@ -804,6 +804,12 @@ class TestMismatchKernelSimilarity:
         assert s_m0 == m.spectrum_kernel_similarity("CCCCN", "CCCCO", k=4)
         assert 0.0 <= s_m1 <= 1.0
 
+    def test_m0_fallback_preserves_normalization_flags(self):
+        s1, s2 = "CC1CC1", "CC2CC2"
+        expected = m.spectrum_kernel_similarity(s1, s2, k=4, coefficient="tanimoto", preprocess=False, normalize_rings=True)
+        actual = m.mismatch_kernel_similarity(s1, s2, k=4, m=0, coefficient="tanimoto", preprocess=False, normalize_rings=True)
+        assert actual == approx(expected)
+
     def test_known_value(self):
         # Independently verified against a brute-force reimplementation of the
         # mismatch-kernel definition (exhaustive Hamming-ball expansion over the

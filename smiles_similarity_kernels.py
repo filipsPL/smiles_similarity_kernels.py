@@ -2060,8 +2060,17 @@ def mismatch_kernel_similarity(
     if m < 0:
         raise ValueError("m must be >= 0")
     if m == 0:
-        # Fall back to the plain spectrum kernel — same semantics, faster path.
-        return spectrum_kernel_similarity(smiles1, smiles2, k=k, coefficient=coefficient, normalize_rings=False, preprocess=False)
+        # Fall back to the plain spectrum kernel while preserving the caller's
+        # preprocessing and ring-normalization choices.  This keeps the m=0
+        # shortcut semantically identical to the general implementation.
+        return spectrum_kernel_similarity(
+            smiles1,
+            smiles2,
+            k=k,
+            coefficient=coefficient,
+            normalize_rings=normalize_rings,
+            preprocess=preprocess,
+        )
 
     if len(smiles1) < k and len(smiles2) < k:
         return 1.0 if smiles1 == smiles2 else 0.0
