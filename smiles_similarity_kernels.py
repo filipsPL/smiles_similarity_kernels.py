@@ -49,15 +49,22 @@ Pharmacophoric alphabet (12 classes, fixed order):
                                 [NH2], [OH], [nH], [NH2+], etc.
   A       H-bond acceptor       bare N, O, n, o, F; bracket [N]/[O]/[F] w/o '+'
   R       Aromatic atom         bare c, n, o, s, p tokens
-  T       Sp3 carbon            bare C token (Cl handled as one token by tokenizer)
-  L       Lipophilic run        count of contiguous C/c token runs (not atom count)
-  P       Positive ionizable    bracket N/n with explicit '+': [NH2+], [nH+], [N+]
+  T       Aliphatic carbon      bare C token (Cl handled as one token by tokenizer);
+                                every non-aromatic carbon, sp3 and sp2/sp alike — a
+                                token carries no hybridisation information
+  L       Lipophilic run        count of contiguous C/c token runs (not atom count);
+                                runs are broken by ring digits and branch parens, so
+                                this is a string-topology feature (benzene -> L=2)
+  P       Positive ionizable    bracket N/n with explicit '+': [NH2+], [nH+], [N+],
+                                excluding nitro/N-oxide nitrogens (formally +, but
+                                neither protonatable nor permanently cationic)
   M       Negative ionizable    bracket O/N/S with explicit '-': [O-], [NH-], [S-]
-  Q       Quaternary N+         bracket [N+] without any H: permanently charged N
+                                (includes a nitro group's [O-])
+  Q       Quaternary N+         bracket [N+] without any H, excluding nitro/N-oxide
   E       Carbonyl              '=O' bond where the other atom is C/c (C=O or O=C)
   X       Halogen               bare F, Cl, Br, I tokens
   S       Sulfur (any)          bare S, s, or bracket atom starting with S/s
-  G       Ring closure          count of ring-closure tokens (digits 1-9, %NN)
+  G       Ring closure          count of ring-closure tokens (digits 0-9, %NN)
 
 Detection uses the Schwaller tokenizer so multi-character atoms (Cl, Br, [nH])
 are indivisible units.  Canonicalization via RDKit is applied before detection
@@ -67,6 +74,11 @@ when RDKit is available (strongly recommended for consistent results).
   [0:12]   12D — per-class integer counts (one dimension per class above)
   [12:78]  66D — pairwise min co-occurrence: min(count_i, count_j)
                  for all C(12,2) = 66 unique pairs i < j
+
+Note the [12:78] layer is a deterministic function of [0:12] (in 'binary' mode
+simply the pairwise AND of the 12 presence bits), so the *intrinsic*
+dimensionality is 12: describe PhaSMIfp as a 12D count vector expanded to 78D
+with pairwise interaction terms, not as "a 78D descriptor".
 
 Three output modes (``output`` parameter / registry key suffix):
   'count'      — raw integer counts (default); use for distance-based methods
@@ -174,6 +186,13 @@ ELEMENT_REPLACEMENTS = {
     # --- Halogens ---
     "Cl": "L",
     "Br": "R",
+    # --- Noble gases ---
+    "He": "Ì",
+    "Ne": "Í",
+    "Ar": "Î",
+    "Kr": "Ò",
+    "Xe": "Õ",
+    "Rn": "Ü",
     # --- Metalloids and chalcogens ---
     "Si": "G",
     "Se": "E",
@@ -185,14 +204,16 @@ ELEMENT_REPLACEMENTS = {
     "Ge": "«",
     "Ga": "¬",
     # --- Common metals ---
-    "Na": "Y",
+    "Na": "Ï",  # was "Y" -- collided with the bare (unmapped) element symbol
+    # Yttrium, making [Na] and [Y] indistinguishable after preprocessing.
     "Ca": "Ω",
     "Mg": "M",
     "Fe": "X",
     "Zn": "Z",
     "Cu": "Q",
     "Mn": "J",
-    "Co": "K",
+    "Co": "Ñ",  # was "K" -- collided with the bare (unmapped) element symbol
+    # Potassium, making [Co] and [K] indistinguishable after preprocessing.
     "Ni": "Θ",
     "Al": "A",
     "Li": "Λ",
@@ -224,6 +245,15 @@ ELEMENT_REPLACEMENTS = {
     "Ta": "º",
     "Re": "»",
     "Tc": "¼",
+    "Sc": "Ð",
+    "Rb": "Ó",
+    "Zr": "Ô",
+    "Cs": "Ö",
+    "Hf": "Ù",
+    "Po": "Ú",
+    "At": "Û",
+    "Fr": "Ý",
+    "Ac": "Þ",
     # Single-character element symbols (W, V, U) mapped to unique Unicode purely
     # for completeness of the element table and a canonical preprocessed form.
     # NOTE: unlike the multi-character entries above, these do NOT affect any
@@ -238,6 +268,7 @@ ELEMENT_REPLACEMENTS = {
     "Ce": "¾",
     "Pr": "¿",
     "Nd": "À",
+    "Pm": "Ø",
     "Sm": "Á",
     "Eu": "Â",
     "Gd": "Ã",
@@ -248,16 +279,49 @@ ELEMENT_REPLACEMENTS = {
     "Tm": "È",
     "Yb": "É",
     "Lu": "Ê",
+    "Th": "ß",
+    "Pa": "à",
+    "Np": "á",
+    "Pu": "â",
+    "Am": "ã",
+    "Cm": "ä",
+    "Bk": "å",
+    "Cf": "æ",
+    "Es": "ç",
+    "Fm": "è",
+    "Md": "é",
+    "No": "ê",
+    "Lr": "ë",
 }
 
 # Reverse mapping for decoding (if needed) - not needed, indeed, but may be useful.
 ELEMENT_REVERSE = {v: k for k, v in ELEMENT_REPLACEMENTS.items()}
 
-# Pre-compiled regex for fast, correct multi-character element replacement.
-# Keys are sorted longest-first so that longer patterns (e.g. '@@', '@TH1')
-# are always matched before shorter prefixes (e.g. '@'), avoiding partial
-# replacements that sequential str.replace() calls would produce.
-_PREPROCESS_PATTERN = re.compile("|".join(re.escape(k) for k in sorted(ELEMENT_REPLACEMENTS.keys(), key=len, reverse=True)))
+# Matches one bracket-atom span, e.g. "[13CH4]", "[C@@H]", "[Fe+3]". Shared by
+# preprocess_smiles (bracket-only element/stereo substitution, below) and
+# normalize_ring_numbers (bracket-exempt ring-digit normalization).
+_BRACKET_SPAN_RE = re.compile(r"\[[^\]]*\]")
+
+# Elements of the SMILES "organic subset" (B, C, N, O, P, S, F, Cl, Br, I) may
+# legally appear *unbracketed*; every other element -- and every stereo
+# descriptor (@@, @TH1, ...), which is only ever valid inside a bracket atom
+# -- must be written in brackets. Of the multi-character keys, only Cl/Br
+# fall in the organic subset, so they are the only ones matched outside
+# bracket spans. Matching the rest unconditionally (the original
+# implementation) misreads coincidental adjacent characters as an element
+# they cannot legally denote there: bare "In1cccc1" (N-iodopyrrole: I + n1...)
+# or "Sn1cnnc1" (S + n1..., an S-substituted azole) were silently rewritten
+# as indium/tin. Restricting them to bracket spans removes that whole class
+# of false positive while matching every case that was ever legitimately a
+# metal/rare-element/stereo token, since those are already required to be
+# bracketed in valid SMILES.
+_BARE_LEGAL_ELEMENT_KEYS = {"Cl", "Br"}
+_PREPROCESS_PATTERN_BARE = re.compile(
+    "|".join(re.escape(k) for k in sorted(_BARE_LEGAL_ELEMENT_KEYS, key=len, reverse=True))
+)
+_PREPROCESS_PATTERN_BRACKETED = re.compile(
+    "|".join(re.escape(k) for k in sorted((k for k in ELEMENT_REPLACEMENTS if k not in _BARE_LEGAL_ELEMENT_KEYS), key=len, reverse=True))
+)
 
 
 def preprocess_smiles(smiles: str) -> str:
@@ -268,6 +332,13 @@ def preprocess_smiles(smiles: str) -> str:
     As specified in Öztürk et al. (2016):
     "All SMILES strings are modified such that atoms represented with
     two characters such as 'Cl' and 'Br' are replaced with single characters."
+
+    Only Cl/Br (the multi-character members of the SMILES organic subset) are
+    substituted outside of bracket atoms; every other multi-character element
+    and every stereo descriptor is substituted only *within* ``[...]`` spans,
+    since valid SMILES requires brackets for all of them anyway -- see the
+    comment above ``_PREPROCESS_PATTERN_BRACKETED`` for why matching them
+    unconditionally is a correctness bug, not just an edge case.
 
     Parameters
     ----------
@@ -288,17 +359,46 @@ def preprocess_smiles(smiles: str) -> str:
     'c1ccc(R)cc1'
     >>> preprocess_smiles("C[C@@H](Cl)Br")
     'C[C¡H](L)R'
+    >>> preprocess_smiles("In1cccc1")  # bare "In" is not indium (no brackets)
+    'In1cccc1'
+    >>> preprocess_smiles("[In]1cccc1")  # bracketed indium is substituted
+    '[®]1cccc1'
     """
-    return _PREPROCESS_PATTERN.sub(lambda m: ELEMENT_REPLACEMENTS[m.group(0)], smiles)
+    smiles = _PREPROCESS_PATTERN_BARE.sub(lambda m: ELEMENT_REPLACEMENTS[m.group(0)], smiles)
+    if not _PREPROCESS_PATTERN_BRACKETED.search(smiles):
+        return smiles
+
+    def _sub_bracket(match: re.Match) -> str:
+        return _PREPROCESS_PATTERN_BRACKETED.sub(lambda m: ELEMENT_REPLACEMENTS[m.group(0)], match.group(0))
+
+    return _BRACKET_SPAN_RE.sub(_sub_bracket, smiles)
+
+
+# Ring-closure digits appear only *outside* bracket atoms; digits inside
+# brackets encode isotopes, explicit H-counts, or charge (e.g. [13CH4],
+# [NH3+]) and must survive normalization untouched. Blanket digit-replacement
+# (the original implementation) collapses [NH2+] and [NH3+] to the same
+# token and destroys isotope labels -- a correctness bug for any charge- or
+# isotope-sensitive comparison, not just a cosmetic one.
+_RING_BRACKET_RE = _BRACKET_SPAN_RE  # shared bracket-atom-span pattern, see its definition
+_RING_DIGIT_RE = re.compile(r"%\d\d|\d")
+
+
+def _normalize_ring_segment(segment: str) -> str:
+    return _RING_DIGIT_RE.sub(lambda m: "%00" if m.group(0)[0] == "%" else "0", segment)
 
 
 def normalize_ring_numbers(smiles: str) -> str:
     """
-    Normalize ring numbers in SMILES string by replacing all digits with '0'.
+    Normalize ring-closure digits in a SMILES string to '0'.
 
     As specified in Ã–ztÃ¼rk et al. (2016) for LINGO method:
     "Before the LINGO creation process, all ring numbers in the SMILES
     string are set to '0'."
+
+    Only digits *outside* bracket atoms are ring-closure numbers; digits
+    inside brackets ([13CH4], [NH3+], [C@@H2-]) are isotope labels, H-counts,
+    or charges and are left untouched.
 
     Parameters
     ----------
@@ -308,7 +408,8 @@ def normalize_ring_numbers(smiles: str) -> str:
     Returns
     -------
     str
-        SMILES with all ring numbers normalized to '0'
+        SMILES with ring-closure digits normalized to '0'; bracket-atom
+        contents unchanged.
 
     Examples
     --------
@@ -316,8 +417,17 @@ def normalize_ring_numbers(smiles: str) -> str:
     'c0ccccc0'
     >>> normalize_ring_numbers("C1CC2CCCCC2C1")
     'C0CC0CCCCC0C0'
+    >>> normalize_ring_numbers("[NH3+]CC1CCCCC1")
+    '[NH3+]CC0CCCCC0'
     """
-    return re.sub(r"[0-9]", "0", smiles)
+    out = []
+    pos = 0
+    for m in _RING_BRACKET_RE.finditer(smiles):
+        out.append(_normalize_ring_segment(smiles[pos : m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(_normalize_ring_segment(smiles[pos:]))
+    return "".join(out)
 
 
 def canonicalize_smiles(smiles: str) -> str:
@@ -623,22 +733,44 @@ def shuffle_smiles(smiles: str, seed: Optional[int] = None) -> str:
     """
     Randomly shuffle the characters of a SMILES string.
 
-    This is a **negative control** transformation: the result is a chemically
-    meaningless string of the same length and character composition as the
-    input.  Similarity scores computed against shuffled strings should be
-    close to the baseline expected for random string pairs.
+    This is an **ordering ablation**, not a random/null baseline: the result
+    keeps the input's exact length and character multiset and destroys only
+    the *order*.  A method's shuffled score is therefore not "its score on
+    unrelated molecules" — it is its score using symbol composition alone,
+    with ordering information removed, so the drop from the unshuffled score
+    measures how much of that method's signal comes from character order.
+    For a chance-level baseline you need a different construction entirely
+    (property-matched decoys, scaffold-split holdouts, y-scrambling).
 
     Parameters
     ----------
     smiles : str
         Input SMILES string
     seed : int or None
-        Optional random seed for reproducibility
+        Optional seed for reproducibility.  Folded together with a hash of
+        *smiles* itself (see Notes) so that a fixed seed applied across many
+        different molecules -- the CLI's ``--shuffle-seed`` usage -- gives
+        each one an independent permutation rather than the same one.
 
     Returns
     -------
     str
         Character-shuffled version of the input string
+
+    Notes
+    -----
+    ``random.Random(seed).shuffle`` performs a sequence of swaps determined
+    entirely by ``seed`` and the length of the list -- it does not depend on
+    the list's contents. A bare ``random.Random(seed)`` therefore applies the
+    *identical* permutation to every string of the same length, so with a
+    fixed ``--shuffle-seed`` two equal-length molecules keep their positional
+    correspondence intact: Hamming similarity is exactly invariant under a
+    shared permutation, and alignment-based methods are partly preserved too
+    -- the "shuffled" ablation silently keeps the very signal it is meant to
+    destroy. Mixing ``zlib.crc32(smiles)`` into the seed gives each
+    string its own permutation while keeping the result deterministic for a
+    given (smiles, seed) pair (``hash()`` is not used here since it is salted
+    per Python process and would break reproducibility across runs).
 
     Examples
     --------
@@ -646,7 +778,12 @@ def shuffle_smiles(smiles: str, seed: Optional[int] = None) -> str:
     True
     """
     chars = list(smiles)
-    rng = random.Random(seed)
+    if seed is None:
+        rng = random.Random()
+    else:
+        import zlib
+
+        rng = random.Random((int(seed) << 32) ^ zlib.crc32(smiles.encode("utf-8")))
     rng.shuffle(chars)
     return "".join(chars)
 
@@ -655,11 +792,14 @@ def sort_string(s: str) -> str:
     """
     Sort the characters of a string alphabetically.
 
-    Like :func:`shuffle_smiles`, this is a **negative control** transformation:
-    the result is chemically meaningless but preserves the length and character
-    composition of the input.  Sorting is deterministic (no seed needed), which
-    makes it a reproducible fixed-order baseline complementary to the random
-    shuffle.
+    Like :func:`shuffle_smiles`, this is an **ordering ablation**, not a null
+    baseline: length and character composition are preserved exactly and only
+    the order is destroyed.  Sorting is deterministic (no seed needed), so it
+    is the reproducible counterpart to the random shuffle — but note it maps
+    every molecule with the same character multiset onto the *same* string,
+    which makes it essentially a symbol-composition similarity and means it
+    can score **higher** than the unsorted metric.  It is not a lower bound
+    on anything.
 
     Parameters
     ----------
@@ -864,19 +1004,42 @@ def nlcs_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> floa
 
 def mclcs1_length(s1: str, s2: str) -> int:
     """
-    Maximal Consecutive LCS starting from character 1.
-    Common subsequence must be consecutive and start from index 0.
+    Maximal Consecutive LCS starting from character 1 (MCLCS1).
+
+    Implements Algorithm 1 of Islam & Inkpen (2008), *Semantic Text
+    Similarity Using Corpus-Based Word Similarity and String Similarity*,
+    ACM TKDD 2(2), Article 10: takes r_i = the shorter of the two input
+    strings in full, and repeatedly tests whether r_i is a (contiguous)
+    substring of the longer string s_j, shrinking r_i by one character from
+    the right each time it is not, until a match is found (or r_i is empty).
+    The result is the length of the *longest prefix of the shorter string
+    that appears anywhere, as a contiguous substring, in the longer string*
+    -- **not** a synchronized common-prefix check anchored at index 0 of
+    both strings (an earlier implementation did this instead, which is a
+    strictly narrower and generally shorter match: e.g. mclcs1_length("world",
+    "helloworld") is 5 under Algorithm 1 -- "world" occurs whole inside
+    "helloworld" -- but was 0 under the old index-0-of-both-strings check,
+    since 'w' != 'h' at position 0).
+
+    Verified against the paper's own worked example: MCLCS1("albastru",
+    "alabaster") = "al" (length 2) -- see TestMclcs1Length.test_paper_worked_example.
+
+    When the two strings have equal length, Algorithm 1's precondition
+    (r_i must be the *shorter* string) does not by itself pick which one
+    plays that role, and the choice can change the result (searching for a
+    prefix of s1 within s2 is not the same computation as searching for a
+    prefix of s2 within s1). This implementation breaks that tie by using
+    s1 as the prefix donor, which makes ``clcs_similarity`` -- the only
+    caller -- asymmetric specifically for same-length, differently-ordered
+    pairs; it is registered in :data:`ASYMMETRIC_METHODS` accordingly so the
+    batch matrix helpers always evaluate both directions instead of
+    assuming symmetry.
     """
-    min_len = min(len(s1), len(s2))
-    length = 0
-
-    for i in range(min_len):
-        if s1[i] == s2[i]:
-            length += 1
-        else:
-            break
-
-    return length
+    short, long_ = (s1, s2) if len(s1) <= len(s2) else (s2, s1)
+    for i in range(len(short), 0, -1):
+        if short[:i] in long_:
+            return i
+    return 0
 
 
 def mclcsn_length(s1: str, s2: str) -> int:
@@ -909,6 +1072,14 @@ def clcs_similarity(smiles1: str, smiles2: str, w1: float = 0.33, w2: float = 0.
     Combined LCS similarity - weighted combination of NLCS, NMCLCS1, NMCLCSn.
 
     K(S1, S2) = w1*NLCS + w2*NMCLCS1 + w3*NMCLCSn
+
+    Follows Islam & Inkpen (2008), *Semantic Text Similarity Using
+    Corpus-Based Word Similarity and String Similarity*, ACM TKDD 2(2),
+    Article 10, equations (1)-(4) (default weights 0.33/0.33/0.34 match
+    their equal-weighting choice, Section 3.1). See :func:`mclcs1_length`
+    for the definition of MCLCS1 and a note on why this makes ``clcs``
+    asymmetric for same-length input pairs (hence its listing in
+    :data:`ASYMMETRIC_METHODS`).
 
     Parameters
     ----------
@@ -1085,7 +1256,8 @@ SMIFP_CHARS_34 = [
     ".",
 ]
 
-# Extended 38 characters (adding chirality and directional bonds)
+# Extended 38 characters (adding chirality, directional bonds, and the two
+# halogens the base-34 list cannot see -- see note below).
 SMIFP_CHARS_38 = SMIFP_CHARS_34.copy()
 SMIFP_CHARS_38.remove("%")  # Remove '%' as it's rare
 # NOTE: the fingerprint counts characters of the (usually preprocessed) string with
@@ -1095,7 +1267,15 @@ SMIFP_CHARS_38.remove("%")  # Remove '%' as it's rare
 # preprocess_smiles has already rewritten '@@' -> the sentinel by the time counting
 # happens).  Using the sentinel makes the chirality dimension live under the default
 # preprocess=True path.
-SMIFP_CHARS_38.extend(["/", "\\", ELEMENT_REPLACEMENTS["@@"]])
+#
+# Same reasoning applies to Cl/Br: SMIFP_CHARS_34 only has single-character
+# element symbols (F, I, ...), so after preprocess_smiles rewrites "Cl"/"Br"
+# to their single-character sentinels those sentinels must be counted symbols
+# in their own right, or the 34-char list is silently blind to two of the
+# four common halogens (F and I are counted, Cl and Br are not -- benzene and
+# chlorobenzene get identical fingerprints). Adding them here also brings
+# this list to its promised 38 characters (it was previously 36).
+SMIFP_CHARS_38.extend(["/", "\\", ELEMENT_REPLACEMENTS["@@"], ELEMENT_REPLACEMENTS["Cl"], ELEMENT_REPLACEMENTS["Br"]])
 
 
 def smiles_to_fingerprint(smiles: str, chars: List[str] = None) -> np.ndarray:
@@ -1202,6 +1382,18 @@ def smifp_similarity_tanimoto(smiles1: str, smiles2: str, chars: List[str] = Non
 # ============================================================================
 
 
+def _lingo_normalized_string(smiles: str, preprocess: bool, normalize_rings: bool = True) -> str:
+    """The exact string get_lingos() would chunk into q-grams, without the
+    chunking step. Used by the LINGO family's degenerate "both too short for
+    any q-gram" branch to compare the strings actually being compared,
+    instead of returning an unconditional constant for every such pair."""
+    if preprocess:
+        smiles = preprocess_smiles(smiles)
+    if normalize_rings:
+        smiles = normalize_ring_numbers(smiles)
+    return smiles
+
+
 def get_lingos(smiles: str, q: int = 4, normalize_rings: bool = True, preprocess: bool = True) -> Counter:
     """
     Extract LINGOs (q-character substrings) from SMILES.
@@ -1213,7 +1405,14 @@ def get_lingos(smiles: str, q: int = 4, normalize_rings: bool = True, preprocess
     q : int
         LINGO length (default 4)
     normalize_rings : bool
-        Whether to normalize ring numbers to '0'
+        Whether to normalize ring-closure digits to '0'.  **SMILES-only** —
+        pass False for InChI, SELFIES or any other non-SMILES input: outside
+        of SMILES a digit is not a ring-closure label, and blanking digits
+        destroys the representation's actual content (an InChI connection
+        layer is almost entirely digits, so ``c1-2-4-6-5-3-1`` collapses to
+        ``c0-0-0-0-0-0-0`` and benzene becomes indistinguishable from
+        pyridine).  See :data:`_RING_NORMALIZING_METHODS`, which the CLI uses
+        to switch this off automatically under ``--inchi``/``--selfies``.
     preprocess : bool
         Whether to preprocess multi-char elements
 
@@ -1238,13 +1437,22 @@ def get_lingos(smiles: str, q: int = 4, normalize_rings: bool = True, preprocess
     return lingos
 
 
-def lingo_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True) -> float:
+def lingo_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True, normalize_rings: bool = True) -> float:
     """
-    LINGOsim - LINGO-based Tanimoto similarity.
+    LINGOsim (Vidal, Thormann & Pons 2005) — mean per-q-gram agreement ratio.
 
     LINGOsim = Î£(1 - |N(S1,i) - N(S2,i)| / (N(S1,i) + N(S2,i))) / m
 
     where m is total number of unique LINGOs, N(S,i) is frequency of LINGO i in S.
+
+    Despite being described as "Tanimoto-like" in some secondary literature
+    (including Öztürk et al. 2016, which this module otherwise follows),
+    this formula is neither the Tanimoto nor the Dice coefficient: it is an
+    unweighted mean, over unique q-grams, of a per-q-gram agreement ratio,
+    not a ratio of a single intersection to a single union/sum computed once
+    over the whole count vector. See :func:`lingo_ruzicka_similarity` for an
+    actual (multiset/weighted) Jaccard-Tanimoto on the same q-grams, and
+    :func:`lingo_dice_similarity` for an actual Dice coefficient.
 
     Parameters
     ----------
@@ -1256,20 +1464,37 @@ def lingo_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = 
         LINGO length
     preprocess : bool
         Whether to preprocess SMILES
+    normalize_rings : bool
+        Whether to blank ring-closure digits before q-gram extraction
+        (default True, as specified by Öztürk et al. 2016).  SMILES-only —
+        pass False for InChI/SELFIES input; see :func:`get_lingos`.
 
     Returns
     -------
     float
         Similarity score in [0, 1]
     """
-    lingos1 = get_lingos(smiles1, q, normalize_rings=True, preprocess=preprocess)
-    lingos2 = get_lingos(smiles2, q, normalize_rings=True, preprocess=preprocess)
+    lingos1 = get_lingos(smiles1, q, normalize_rings=normalize_rings, preprocess=preprocess)
+    lingos2 = get_lingos(smiles2, q, normalize_rings=normalize_rings, preprocess=preprocess)
 
     # Get all unique LINGOs
     all_lingos = set(lingos1.keys()) | set(lingos2.keys())
 
     if len(all_lingos) == 0:
-        return 1.0
+        # Both strings are shorter than q (a string of length >= q always
+        # yields >= 1 LINGO, so this branch is exactly the "both too short"
+        # case). Compare the actual normalized strings instead of returning
+        # an unconditional 1.0 -- two unrelated short fragments (e.g. two
+        # different nucleoside-fragment-sized SMILES) used to score a
+        # perfect match just for being "equally empty", which is wrong for
+        # virtual-screening use even though it's a defensible set-theoretic
+        # convention in isolation. Mirrors spectrum_kernel_similarity's
+        # convention for its analogous degenerate (both-too-short) case.
+        return (
+            1.0
+            if _lingo_normalized_string(smiles1, preprocess, normalize_rings) == _lingo_normalized_string(smiles2, preprocess, normalize_rings)
+            else 0.0
+        )
 
     similarity_sum = 0.0
 
@@ -1290,6 +1515,7 @@ def lingo_tversky_similarity(
     alpha: float = 0.9,
     beta: float = 0.1,
     preprocess: bool = True,
+    normalize_rings: bool = True,
 ) -> float:
     """
     Asymmetric Tversky similarity on LINGO (q-gram) count vectors.
@@ -1327,6 +1553,9 @@ def lingo_tversky_similarity(
         Default 0.1 (query-weighted).
     preprocess : bool
         Whether to preprocess SMILES before q-gram extraction.
+    normalize_rings : bool
+        Whether to blank ring-closure digits (default True).  SMILES-only —
+        pass False for InChI/SELFIES input; see :func:`get_lingos`.
 
     Returns
     -------
@@ -1341,11 +1570,17 @@ def lingo_tversky_similarity(
     ligand-based methods for the discovery of small-molecule nucleic
     acid binders." Briefings in Bioinformatics, 2025.
     """
-    lingos1 = get_lingos(smiles1, q, normalize_rings=True, preprocess=preprocess)
-    lingos2 = get_lingos(smiles2, q, normalize_rings=True, preprocess=preprocess)
+    lingos1 = get_lingos(smiles1, q, normalize_rings=normalize_rings, preprocess=preprocess)
+    lingos2 = get_lingos(smiles2, q, normalize_rings=normalize_rings, preprocess=preprocess)
 
     if not lingos1 and not lingos2:
-        return 1.0
+        # Both strings shorter than q; see _lingo_normalized_string's use in
+        # lingo_similarity for why an unconditional 1.0 here is wrong.
+        return (
+            1.0
+            if _lingo_normalized_string(smiles1, preprocess, normalize_rings) == _lingo_normalized_string(smiles2, preprocess, normalize_rings)
+            else 0.0
+        )
     if not lingos1 or not lingos2:
         return 0.0
 
@@ -1368,7 +1603,7 @@ def lingo_tversky_similarity(
     return intersection / denominator
 
 
-def lingo_dice_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True) -> float:
+def lingo_dice_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True, normalize_rings: bool = True) -> float:
     """
     Sørensen–Dice coefficient on LINGO (q-gram) count vectors.
 
@@ -1385,16 +1620,19 @@ def lingo_dice_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bo
         LINGO length (default 4).
     preprocess : bool
         Whether to preprocess SMILES.
+    normalize_rings : bool
+        Whether to blank ring-closure digits (default True).  SMILES-only —
+        pass False for InChI/SELFIES input; see :func:`get_lingos`.
 
     Returns
     -------
     float
         Dice similarity in [0, 1].
     """
-    return lingo_tversky_similarity(smiles1, smiles2, q=q, alpha=0.5, beta=0.5, preprocess=preprocess)
+    return lingo_tversky_similarity(smiles1, smiles2, q=q, alpha=0.5, beta=0.5, preprocess=preprocess, normalize_rings=normalize_rings)
 
 
-def lingo_ruzicka_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True) -> float:
+def lingo_ruzicka_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True, normalize_rings: bool = True) -> float:
     """
     Ruzicka similarity (weighted Jaccard) on LINGO (q-gram) count multisets.
 
@@ -1424,16 +1662,19 @@ def lingo_ruzicka_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess:
         LINGO length (default 4).
     preprocess : bool
         Whether to preprocess SMILES.
+    normalize_rings : bool
+        Whether to blank ring-closure digits (default True).  SMILES-only —
+        pass False for InChI/SELFIES input; see :func:`get_lingos`.
 
     Returns
     -------
     float
         Ruzicka (weighted Jaccard) similarity in [0, 1].
     """
-    return lingo_tversky_similarity(smiles1, smiles2, q=q, alpha=1.0, beta=1.0, preprocess=preprocess)
+    return lingo_tversky_similarity(smiles1, smiles2, q=q, alpha=1.0, beta=1.0, preprocess=preprocess, normalize_rings=normalize_rings)
 
 
-def lingo_jaccard_binary_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True) -> float:
+def lingo_jaccard_binary_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True, normalize_rings: bool = True) -> float:
     """
     Binary (set) Jaccard/Tanimoto similarity on LINGO (q-gram) presence/absence.
 
@@ -1457,16 +1698,25 @@ def lingo_jaccard_binary_similarity(smiles1: str, smiles2: str, q: int = 4, prep
         LINGO length (default 4).
     preprocess : bool
         Whether to preprocess SMILES.
+    normalize_rings : bool
+        Whether to blank ring-closure digits (default True).  SMILES-only —
+        pass False for InChI/SELFIES input; see :func:`get_lingos`.
 
     Returns
     -------
     float
         Binary Jaccard similarity in [0, 1].
     """
-    set1 = set(get_lingos(smiles1, q, normalize_rings=True, preprocess=preprocess))
-    set2 = set(get_lingos(smiles2, q, normalize_rings=True, preprocess=preprocess))
+    set1 = set(get_lingos(smiles1, q, normalize_rings=normalize_rings, preprocess=preprocess))
+    set2 = set(get_lingos(smiles2, q, normalize_rings=normalize_rings, preprocess=preprocess))
     if not set1 and not set2:
-        return 1.0
+        # Both strings shorter than q; see _lingo_normalized_string's use in
+        # lingo_similarity for why an unconditional 1.0 here is wrong.
+        return (
+            1.0
+            if _lingo_normalized_string(smiles1, preprocess, normalize_rings) == _lingo_normalized_string(smiles2, preprocess, normalize_rings)
+            else 0.0
+        )
     if not set1 or not set2:
         return 0.0
     intersection = len(set1 & set2)
@@ -1474,7 +1724,7 @@ def lingo_jaccard_binary_similarity(smiles1: str, smiles2: str, q: int = 4, prep
     return intersection / union if union else 0.0
 
 
-def lingo_dice_binary_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True) -> float:
+def lingo_dice_binary_similarity(smiles1: str, smiles2: str, q: int = 4, preprocess: bool = True, normalize_rings: bool = True) -> float:
     """
     Binary (set) Sørensen-Dice coefficient on LINGO (q-gram) presence/absence.
 
@@ -1501,13 +1751,16 @@ def lingo_dice_binary_similarity(smiles1: str, smiles2: str, q: int = 4, preproc
         LINGO length (default 4).
     preprocess : bool
         Whether to preprocess SMILES.
+    normalize_rings : bool
+        Whether to blank ring-closure digits (default True).  SMILES-only —
+        pass False for InChI/SELFIES input; see :func:`get_lingos`.
 
     Returns
     -------
     float
         Binary Dice similarity in [0, 1].
     """
-    jaccard = lingo_jaccard_binary_similarity(smiles1, smiles2, q=q, preprocess=preprocess)
+    jaccard = lingo_jaccard_binary_similarity(smiles1, smiles2, q=q, preprocess=preprocess, normalize_rings=normalize_rings)
     return 2.0 * jaccard / (1.0 + jaccard)
 
 
@@ -1561,6 +1814,13 @@ def spectrum_kernel_similarity(
         mechanism as :func:`lingo_tversky_similarity`) rather than a dot
         product — a mathematically distinct normalisation, not merely a
         rename of the existing ``'dice'``.
+        Note on naming: ``'tanimoto'`` here is ``dot / (||A||^2 + ||B||^2 -
+        dot)`` on *count* vectors -- the extended (Gower) Tanimoto/Jaccard
+        coefficient. It is a different quantity from the binary Tanimoto
+        coefficient (set intersection / union, no multiplicities) and from
+        ``lingo_ruzicka_similarity``'s multiset Jaccard (``sum(min) /
+        sum(max)`` over k-mer counts) -- all three coincide only when every
+        k-mer occurs at most once in both sequences.
     alpha, beta : float
         Asymmetric weights for ``coefficient='tversky'`` applied to the
         k-mers unique to *smiles1* and *smiles2* respectively (default
@@ -1643,6 +1903,49 @@ def spectrum_kernel_similarity(
 # ============================================================================
 
 
+def corpus_alphabet(strings: List[str], preprocess: bool = True) -> str:
+    """
+    Compute a fixed, dataset-wide alphabet for :func:`mismatch_kernel_similarity`.
+
+    ``mismatch_kernel_similarity``'s neighbourhood-expansion feature map is
+    only a valid, comparable kernel across the pairs of one screening run if
+    every pair expands over the *same* alphabet. Its default ``alphabet=None``
+    derives the alphabet from just the two strings being compared, which
+    changes per pair -- the Gram matrix it induces has no PSD guarantee, and
+    scores are not comparable across pairs or across a library of different
+    composition (see the "Notes" section there). That per-pair default is
+    only appropriate for an isolated, one-off comparison with no larger
+    corpus to draw from.
+
+    Call this once over the full set of SMILES in the study (templates +
+    library) and pass the result as ``alphabet=`` to get scores that are
+    comparable across the whole screen -- this is what
+    :func:`compute_similarity_matrix`/:func:`compute_cross_similarity_matrix`
+    do automatically for ``mismatch``/``mismatch3``/``mismatch5`` unless an
+    explicit ``alphabet=`` is already supplied.
+
+    Parameters
+    ----------
+    strings : List[str]
+        SMILES strings the alphabet is derived from.
+    preprocess : bool
+        Whether to run :func:`preprocess_smiles` on each string first
+        (default True), matching ``mismatch_kernel_similarity``'s own
+        default. Pass False if *strings* are already preprocessed, or are a
+        non-SMILES representation.
+
+    Returns
+    -------
+    str
+        Sorted, de-duplicated concatenation of every character across
+        *strings*.
+    """
+    if not strings:
+        return ""
+    prep = preprocess_smiles if preprocess else (lambda s: s)
+    return "".join(sorted(set().union(*(set(prep(s)) for s in strings))))
+
+
 @functools.lru_cache(maxsize=4096)
 def _generate_mismatches(kmer: str, m: int, alphabet: str) -> List[str]:
     """
@@ -1716,8 +2019,18 @@ def mismatch_kernel_similarity(
     alphabet : str, optional
         Alphabet used to enumerate mismatches.  If not given, the union
         of characters that actually appear in the two preprocessed
-        SMILES strings is used — this keeps the neighbourhood small
-        while still capturing every biologically meaningful substitution.
+        SMILES strings is used — this keeps the neighbourhood small,
+        but makes the feature map (and thus the score) depend on which
+        pair is being compared: two pairs of k-mers at the same Hamming
+        distance can get different similarities depending on what else
+        appears in each pair, and the Gram matrix over a library has no
+        PSD guarantee. This pair-local default is only appropriate for
+        an isolated, one-off comparison. For a screening run (multiple
+        templates/library molecules), fix the alphabet across the whole
+        dataset with :func:`corpus_alphabet` and pass it here explicitly
+        so every pair is scored in the same feature space --
+        :func:`compute_similarity_matrix`/:func:`compute_cross_similarity_matrix`
+        do this automatically unless you already pass your own.
 
     Returns
     -------
@@ -1845,23 +2158,16 @@ def longest_common_substring_similarity(smiles1: str, smiles2: str, preprocess: 
 # ============================================================================
 
 
-def _subsequence_kernel_raw(s: str, t: str, n: int, lam: float) -> float:
-    """
-    Raw (un-normalised) gap-weighted subsequence kernel value K_n(s, t).
+# Below this string length (both strings), scipy/numpy call overhead outweighs
+# the vectorized path's savings and the plain Python DP is faster in absolute
+# terms (both are sub-millisecond there anyway); measured crossover is ~16
+# characters. Typical drug-like SMILES (20-100+ chars) sit well above it.
+_SUBSEQUENCE_VECTORIZE_MIN_LEN = 16
 
-    Implements the O(n·|s|·|t|) dynamic program of Lodhi et al. (2002).  The
-    kernel sums over every length-``n`` subsequence ``u`` shared by ``s`` and
-    ``t``, weighting each occurrence by ``lam`` raised to the *span* it covers
-    (last index − first index + 1, so interior gaps are penalised):
 
-        K_n(s, t) = Σ_u ( Σ_{i: s[i]=u} lam^span(i) ) ( Σ_{j: t[j]=u} lam^span(j) )
-
-    Verified bit-for-bit against a brute-force enumeration of this definition.
-    Returns 0.0 when either string is shorter than ``n``.
-    """
+def _subsequence_kernel_raw_scalar(s: str, t: str, n: int, lam: float) -> float:
+    """Pure-Python O(n·|s|·|t|) DP (Lodhi et al. 2002) -- see :func:`_subsequence_kernel_raw`."""
     ls, lt = len(s), len(t)
-    if ls < n or lt < n:
-        return 0.0
 
     # Kp = K'_{i-1}(s[:a], t[:b]); K'_0 = 1 for all prefixes (incl. empty ones).
     Kp = [[1.0] * (lt + 1) for _ in range(ls + 1)]
@@ -1894,6 +2200,82 @@ def _subsequence_kernel_raw(s: str, t: str, n: int, lam: float) -> float:
             if sa == t[b - 1]:
                 total += lam2 * kp_am1[b - 1]
     return total
+
+
+def _subsequence_kernel_raw_vectorized(s: str, t: str, n: int, lam: float) -> float:
+    """
+    scipy-accelerated reformulation of :func:`_subsequence_kernel_raw_scalar`.
+
+    Both inner recurrences of the Lodhi et al. (2002) DP are first-order
+    linear recursions with a single pole at ``lam`` (K''_i(a,b) rolls over
+    ``b`` within a row; K'_i(a,b) rolls over ``a`` within a column) -- exactly
+    the recurrence a length-1 IIR filter computes. ``scipy.signal.lfilter``
+    with coefficients ``a=[1, -lam], b=[1]`` implements ``y[k] = lam*y[k-1] +
+    x[k]`` directly (a stable, non-approximating computation -- no division
+    by powers of ``lam``, so it does not have the overflow/underflow failure
+    mode a naive "weighted cumsum via lam^-k" vectorization would), and its
+    ``axis=`` parameter filters every row (or column) of a 2D array in one
+    call. This reduces the whole per-level update from a Python loop over
+    every row to two ``lfilter`` calls plus vectorized numpy elementwise ops,
+    with no Python-level loop over the string lengths at all.
+
+    This is an exact algebraic reformulation, not an approximation -- verified
+    by property-based fuzzing against :func:`_subsequence_kernel_raw_scalar`
+    (many random strings/alphabets/lengths/n/lambda combinations, max observed
+    deviation ~1e-10, i.e. floating-point noise) in addition to the module's
+    existing brute-force cross-check (``TestSubsequenceKernel.
+    test_raw_dp_matches_brute_force``, which both paths must satisfy).
+    """
+    from scipy.signal import lfilter
+
+    ls, lt = len(s), len(t)
+    s_codes = np.array([ord(c) for c in s], dtype=np.int64)
+    t_codes = np.array([ord(c) for c in t], dtype=np.int64)
+    mask = (s_codes[:, None] == t_codes[None, :]).astype(np.float64)  # (ls, lt)
+    a_coeffs = [1.0, -lam]
+    b_coeffs = [1.0]
+    lam2 = lam * lam
+
+    Kp = np.ones((ls + 1, lt + 1), dtype=np.float64)
+    for _ in range(1, n):
+        z = lam2 * Kp[:ls, :lt] * mask  # z[a-1,b-1] = lam²·K'_{i-1}(a-1,b-1)·[s_a==t_b]
+        kpp = lfilter(b_coeffs, a_coeffs, z, axis=1)  # K''_i(a,b) for a=1..ls, b=1..lt
+        curr_inner = lfilter(b_coeffs, a_coeffs, kpp, axis=0)  # K'_i(a,b), same range
+        curr = np.zeros((ls + 1, lt + 1), dtype=np.float64)
+        curr[1:, 1:] = curr_inner
+        Kp = curr
+
+    return float(lam2 * np.sum(Kp[:ls, :lt] * mask))
+
+
+def _subsequence_kernel_raw(s: str, t: str, n: int, lam: float) -> float:
+    """
+    Raw (un-normalised) gap-weighted subsequence kernel value K_n(s, t).
+
+    Implements the O(n·|s|·|t|) dynamic program of Lodhi et al. (2002).  The
+    kernel sums over every length-``n`` subsequence ``u`` shared by ``s`` and
+    ``t``, weighting each occurrence by ``lam`` raised to the *span* it covers
+    (last index − first index + 1, so interior gaps are penalised):
+
+        K_n(s, t) = Σ_u ( Σ_{i: s[i]=u} lam^span(i) ) ( Σ_{j: t[j]=u} lam^span(j) )
+
+    Verified bit-for-bit against a brute-force enumeration of this definition.
+    Returns 0.0 when either string is shorter than ``n``.
+
+    Delegates to :func:`_subsequence_kernel_raw_vectorized` (scipy-accelerated,
+    see its docstring) when scipy is available and both strings are at least
+    :data:`_SUBSEQUENCE_VECTORIZE_MIN_LEN` characters long -- below that,
+    :func:`_subsequence_kernel_raw_scalar`'s plain Python DP is faster in
+    absolute terms because numpy/scipy call overhead dominates for short
+    inputs. Both paths are exact reformulations of the same recurrence and
+    must agree; see ``TestSubsequenceKernel`` for the cross-checks.
+    """
+    ls, lt = len(s), len(t)
+    if ls < n or lt < n:
+        return 0.0
+    if SCIPY_AVAILABLE and min(ls, lt) >= _SUBSEQUENCE_VECTORIZE_MIN_LEN:
+        return _subsequence_kernel_raw_vectorized(s, t, n, lam)
+    return _subsequence_kernel_raw_scalar(s, t, n, lam)
 
 
 def subsequence_kernel_similarity(
@@ -2065,7 +2447,14 @@ class LingoVectorizer:
         return self.transform(smiles_list)
 
 
-def lingo_tfidf_similarity(smiles1: str, smiles2: str, q: int = 4, corpus: List[str] = None, vectorizer: LingoVectorizer = None) -> float:
+def lingo_tfidf_similarity(
+    smiles1: str,
+    smiles2: str,
+    q: int = 4,
+    corpus: List[str] = None,
+    vectorizer: LingoVectorizer = None,
+    normalize_rings: bool = True,
+) -> float:
     """
     LINGO-based TF-IDF cosine similarity.
 
@@ -2080,7 +2469,13 @@ def lingo_tfidf_similarity(smiles1: str, smiles2: str, q: int = 4, corpus: List[
     corpus : List[str]
         Corpus for IDF calculation (required for meaningful IDF)
     vectorizer : LingoVectorizer
-        Pre-fitted vectorizer (optional, for efficiency)
+        Pre-fitted vectorizer (optional, for efficiency).  When supplied, its
+        own ``normalize_rings`` setting applies and the argument below is
+        ignored.
+    normalize_rings : bool
+        Whether the vectorizer built here should blank ring-closure digits
+        (default True).  SMILES-only — pass False for InChI/SELFIES input,
+        for the reason given in :func:`get_lingos`.
 
     Returns
     -------
@@ -2097,15 +2492,23 @@ def lingo_tfidf_similarity(smiles1: str, smiles2: str, q: int = 4, corpus: List[
         if corpus is None:
             corpus = [smiles1, smiles2]
 
-        vectorizer = LingoVectorizer(q=q, use_idf=True)
+        vectorizer = LingoVectorizer(q=q, use_idf=True, normalize_rings=normalize_rings)
         try:
             vectorizer.fit(corpus)
         except ValueError:
-            return 0.0
+            # No q-gram anywhere in the corpus; see _tfidf_cosine_similarity
+            # for why the degenerate case compares the strings instead of
+            # returning a flat 0.0.
+            return 1.0 if smiles1 == smiles2 else 0.0
 
         vec1 = vectorizer.transform([smiles1])
         vec2 = vectorizer.transform([smiles2])
 
+    if vec1.getnnz() == 0 and vec2.getnnz() == 0:
+        # Both strings shorter than q — no representable q-gram on either
+        # side, so the cosine is 0/0.  Same convention as lingo_similarity's
+        # "both shorter than q" branch.
+        return 1.0 if smiles1 == smiles2 else 0.0
     sim = sklearn_cosine_similarity(vec1, vec2)[0, 0]
     return sim
 
@@ -2218,8 +2621,23 @@ def _tfidf_cosine_similarity(s1, s2, make_tokenizer, func_name, corpus, ngram_ra
 
     Behaviour is identical to the original per-method bodies: when no fitted
     ``vectorizer`` is supplied one is fit on ``corpus`` (defaulting to the two
-    inputs), an empty-vocabulary ``ValueError`` returns 0.0, and any tokenizer
-    construction error (e.g. a missing BPE vocab file) propagates unchanged.
+    inputs), and any tokenizer construction error (e.g. a missing BPE vocab
+    file) propagates unchanged.
+
+    Degenerate cases are the one deliberate change.  Both of them — an empty
+    fitted vocabulary (no string in the corpus produced a single n-gram) and
+    two all-zero TF-IDF vectors (cosine 0/0, which sklearn reports as 0.0) —
+    used to return a flat 0.0.  That is not a meaningful "dissimilar"
+    verdict, and it fires on real molecules, not just empty strings: with the
+    recommended ``ngram_range=(4, 4)``, any molecule yielding fewer than 4
+    tokens ("CCO", a nucleoside-sized fragment) has no representable n-gram
+    at all, so it scored 0.0 against *itself*.  Both branches now apply the
+    module-wide degenerate-case convention — compare the strings, equal ->
+    1.0, otherwise 0.0 — matching ``lingo_similarity``'s "both shorter than
+    q" branch and ``spectrum_kernel_similarity``'s "both shorter than k".
+    The batch matrix helpers apply the identical rule via
+    :func:`_apply_tfidf_zero_vector_convention` so all three code paths
+    (per-pair, square matrix, cross matrix) agree.
     """
     if not SKLEARN_AVAILABLE:
         raise ImportError(f"sklearn is required for {func_name}")
@@ -2239,10 +2657,16 @@ def _tfidf_cosine_similarity(s1, s2, make_tokenizer, func_name, corpus, ngram_ra
         try:
             vectorizer.fit(corpus)
         except ValueError:
-            return 0.0
+            # Empty vocabulary: nothing in the corpus produced an n-gram in
+            # range, so there is no feature space to compare in.  Same
+            # degenerate-case convention as the zero-vector branch below.
+            return 1.0 if s1 == s2 else 0.0
 
     vec1 = vectorizer.transform([s1])
     vec2 = vectorizer.transform([s2])
+    if vec1.getnnz() == 0 and vec2.getnnz() == 0:
+        # Neither string has a single representable n-gram; see the docstring.
+        return 1.0 if s1 == s2 else 0.0
     return float(sklearn_cosine_similarity(vec1, vec2)[0, 0])
 
 
@@ -2889,6 +3313,12 @@ def jaro_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> floa
     if preprocess:
         smiles1 = preprocess_smiles(smiles1)
         smiles2 = preprocess_smiles(smiles2)
+    # Regression (B6 in insights-opus50.md): jellyfish.jaro_similarity("", "")
+    # is 0.0, inconsistent with every other method's "both empty -> 1.0"
+    # convention -- including this module's own hamming_similarity and
+    # damerau_levenshtein_similarity, right above/below in this same section.
+    if smiles1 == smiles2:
+        return 1.0
     return jellyfish.jaro_similarity(smiles1, smiles2)
 
 
@@ -2914,6 +3344,9 @@ def jaro_winkler_similarity(smiles1: str, smiles2: str, preprocess: bool = True)
     if preprocess:
         smiles1 = preprocess_smiles(smiles1)
         smiles2 = preprocess_smiles(smiles2)
+    # See jaro_similarity's matching comment (B6): both-empty must be 1.0.
+    if smiles1 == smiles2:
+        return 1.0
     return jellyfish.jaro_winkler_similarity(smiles1, smiles2)
 
 
@@ -2993,10 +3426,16 @@ def ncd_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float
     float
         Similarity in [0, 1]
     """
-    if not smiles1 or not smiles2:
-        return 0.0
+    # Regression (B6 in insights-opus50.md): checking the "either side empty"
+    # branch before equality made both-empty return 0.0 ("dissimilar"),
+    # inconsistent with every other method's "both empty -> 1.0, one empty ->
+    # 0.0" convention (nlcs, clcs, substring, lingo, token_edit, monge_elkan,
+    # spectrum/mismatch's "both too short" branch, ...). Equality first
+    # restores that: two empty strings are equal, so they match.
     if smiles1 == smiles2:
         return 1.0
+    if not smiles1 or not smiles2:
+        return 0.0
     if preprocess:
         smiles1 = preprocess_smiles(smiles1)
         smiles2 = preprocess_smiles(smiles2)
@@ -3193,6 +3632,87 @@ def _skip_back_to_atom(tokens: List[str], j: int) -> int:
     return j
 
 
+def _is_oxide_oxygen_token(tok: str) -> bool:
+    """True if *tok* is an oxygen atom token (bare ``O`` or a bracket atom whose
+    element is O, isotope prefix ignored)."""
+    if tok == "O":
+        return True
+    if tok.startswith("[") and tok.endswith("]"):
+        return tok[1:-1].lstrip("0123456789").startswith("O")
+    return False
+
+
+def _is_anionic_oxygen_token(tok: str) -> bool:
+    """True if *tok* is a formally negative bracket oxygen, e.g. ``[O-]``."""
+    return tok.startswith("[") and "-" in tok and _is_oxide_oxygen_token(tok)
+
+
+def _is_nitro_or_noxide_nitrogen(tokens: List[str], i: int) -> bool:
+    """
+    True if the bracket nitrogen token at index *i* is the nitrogen of a nitro
+    group or an N-oxide, i.e. it carries a double-bonded or formally anionic
+    oxygen on an adjacent position.
+
+    Such a nitrogen has a formal ``+`` charge but is neither *positive
+    ionizable* (P) nor a *quaternary ammonium* (Q): the charge is a bookkeeping
+    artefact of a locally neutral (zwitterionic) group, not a protonation site
+    or a permanently cationic centre. Without this test, nitrobenzene
+    (``O=[N+]([O-])c1ccccc1``) produced exactly the same P/Q signature as
+    tetramethylammonium (``C[N+](C)(C)C``) — chemically wrong, and wrong in
+    the direction that matters for nucleic-acid ligand screening, where
+    genuine polycations are the discriminating chemotype.
+
+    Recognises every standard SMILES ordering of the group by inspecting only
+    the nitrogen's immediate neighbourhood: the token before it (``O=[N+]…``,
+    ``[O-][N+]…``), each branch group opening directly after it
+    (``[N+](=O)…``, ``[N+]([O-])…``), and the atom following those branches
+    (``[N+](=O)[O-]``, ``…[n+]([O-])…``).
+
+    Note the scope is deliberately narrow: the nitro oxygens themselves still
+    count toward A (acceptor) and M (negative ionizable), which is the same
+    kind of heuristic over-count the D rule documents below — only the P/Q
+    misassignment is corrected here.
+    """
+
+    def _is_oxide_neighbour(tok: str) -> bool:
+        return _is_anionic_oxygen_token(tok)
+
+    n = len(tokens)
+    # Backward: "O=[N+]..." (an '=' then an oxygen) or "[O-][N+]...".
+    if i >= 1:
+        prev = tokens[i - 1]
+        if prev == "=" and i >= 2 and _is_oxide_oxygen_token(tokens[i - 2]):
+            return True
+        if _is_oxide_neighbour(prev):
+            return True
+    # Forward: branch groups attached directly to the nitrogen, then the atom
+    # that follows them.
+    j = i + 1
+    while j < n and tokens[j] == "(":
+        start = j
+        depth = 0
+        while j < n:
+            if tokens[j] == "(":
+                depth += 1
+            elif tokens[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        group = tokens[start + 1 : j]
+        j += 1  # step past the matching ')'
+        if len(group) == 2 and group[0] == "=" and _is_oxide_oxygen_token(group[1]):
+            return True
+        if len(group) == 1 and _is_oxide_neighbour(group[0]):
+            return True
+    if j < n:
+        if tokens[j] == "=" and j + 1 < n and _is_oxide_oxygen_token(tokens[j + 1]):
+            return True
+        if _is_oxide_neighbour(tokens[j]):
+            return True
+    return False
+
+
 def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
     """
     Return the 12D pharmacophoric class count vector for *smiles*.
@@ -3209,19 +3729,41 @@ def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
                               ([NH2], [OH], [nH], [NH2+], etc.)
       A  H-bond acceptor    — bare N, O, n, o, F; bracket [N]/[O]/[F] without '+'
       R  Aromatic atom      — bare c, n, o, s, p tokens
-      T  Sp3 carbon         — bare C token (tokenizer gives Cl/C as separate tokens)
-      L  Lipophilic run     — count of contiguous C/c runs in token stream
-      P  Positive ionizable — bracket atoms with N/n and explicit '+'
-      M  Negative ionizable — bracket atoms with O/N/S and explicit '-'
-      Q  Quaternary N+      — bracket [N+] without any H
+      T  Aliphatic carbon   — bare 'C' token (tokenizer gives Cl/C as separate
+                              tokens).  This counts *every* non-aromatic carbon,
+                              sp3 and sp2/sp alike — a single token carries no
+                              hybridisation information, so Kekulé benzene
+                              (C1=CC=CC=C1) contributes T=6.  Do not read this
+                              dimension as an sp3 count.
+      L  Lipophilic run     — number of maximal contiguous C/c runs in the token
+                              stream.  Runs are broken by whatever token happens
+                              to intervene, including ring-closure digits and
+                              branch parentheses, so this is a property of the
+                              SMILES *syntax* as much as of the molecule:
+                              benzene (c1ccccc1) scores L=2 because the ring
+                              digits split one aromatic ring into two runs.
+                              ``canonicalize=True`` makes the value
+                              reproducible for a given molecule but does not
+                              make it a chemical descriptor; treat it as a
+                              string-topology feature.
+      P  Positive ionizable — bracket atoms with N/n and explicit '+', excluding
+                              nitro/N-oxide nitrogens (see
+                              _is_nitro_or_noxide_nitrogen)
+      M  Negative ionizable — bracket atoms with O/N/S and explicit '-' (this
+                              includes a nitro group's [O-]; only the P/Q
+                              nitro misassignment is corrected)
+      Q  Quaternary N+      — bracket [N+] without any H, excluding nitro/N-oxide
       E  Carbonyl           — '=O' where the bonded atom is C/c (scan back past closed
                               branches and ring-closure digits via _skip_back_to_atom)
       X  Halogen            — bare F, Cl, Br, I tokens
       S  Sulfur (any)       — bare S, s, or bracket atom starting with S
-      G  Ring closure       — single-digit (1-9) and %NN ring closure tokens
+      G  Ring closure       — single-digit (0-9) and %NN ring closure tokens
+                              (ring-bond number 0 is legal, if unconventional,
+                              SMILES and counts like any other)
 
     Note: D/A/R/T/... are per-token heuristics, not a full valence/connectivity
-    model — see the D rule above for the clearest example of the tradeoff.
+    model — see the D, T and L rules above for the clearest examples of the
+    tradeoff.
     """
     if not smiles:
         return np.zeros(12, dtype=float)
@@ -3237,6 +3779,13 @@ def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
 
     for i, tok in enumerate(tokens):
         is_bracket = tok.startswith("[")
+        # Bracket contents with any leading isotope digits stripped, e.g.
+        # "13CH4" -> "CH4", "15NH2" -> "NH2". Without this, every check below
+        # keys off inner[0]/inner.startswith(...), which a leading isotope
+        # number defeats entirely -- [13CH4], [15NH2], [2H] etc. would
+        # otherwise contribute to none of D/A/P/M/Q/S regardless of the atom
+        # they actually describe.
+        inner = tok[1:-1].lstrip("0123456789") if is_bracket else ""
 
         # D — H-bond donor:
         #   • bare N or O — implicit H by SMILES valence rules (N has 3 bonds, O has 2)
@@ -3244,7 +3793,6 @@ def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
         if tok in ("N", "O"):
             counts[0] += 1  # D (bare, has implicit H unless charge/over-valenced)
         elif is_bracket:
-            inner = tok[1:-1]
             if inner and inner[0] in ("N", "O", "n", "o") and "H" in inner:
                 counts[0] += 1  # D (explicit H in bracket)
 
@@ -3252,7 +3800,6 @@ def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
         if tok in ("N", "O", "n", "o", "F"):
             counts[1] += 1  # A
         elif is_bracket:
-            inner = tok[1:-1]
             if inner and inner[0] in ("N", "O", "F", "n", "o", "f") and "+" not in inner:
                 counts[1] += 1  # A
 
@@ -3260,11 +3807,15 @@ def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
         if tok in ("c", "n", "o", "s", "p"):
             counts[2] += 1  # R
 
-        # T — sp3 carbon: bare 'C' (tokenizer gives Cl as one token, so bare C is safe)
+        # T — aliphatic carbon: bare 'C' (tokenizer gives Cl as one token, so bare
+        # C is safe). Any non-aromatic carbon, not only sp3 — see the class list
+        # in this function's docstring.
         if tok == "C":
             counts[3] += 1  # T
 
-        # L — lipophilic run: count transitions into a C/c run
+        # L — lipophilic run: count transitions into a C/c run. Runs are broken by
+        # ring digits and branch parens, so this is a string-topology feature (see
+        # docstring).
         is_carbon = tok in ("C", "c")
         if is_carbon and not in_lipophilic_run:
             counts[4] += 1  # L — new run starts
@@ -3272,22 +3823,22 @@ def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
         elif not is_carbon:
             in_lipophilic_run = False
 
-        # P — positive ionizable: bracket N/n with explicit '+'
+        # P — positive ionizable: bracket N/n with explicit '+', excluding
+        #     nitro / N-oxide nitrogens (formally +, chemically not a cation —
+        #     see _is_nitro_or_noxide_nitrogen)
         if is_bracket:
-            inner = tok[1:-1]
-            if inner and inner[0] in ("N", "n") and "+" in inner:
+            if inner and inner[0] in ("N", "n") and "+" in inner and not _is_nitro_or_noxide_nitrogen(tokens, i):
                 counts[5] += 1  # P
 
         # M — negative ionizable: bracket O/N/S/s with explicit '-'
         if is_bracket:
-            inner = tok[1:-1]
             if inner and inner[0] in ("O", "N", "S", "o", "n", "s") and "-" in inner:
                 counts[6] += 1  # M
 
-        # Q — quaternary N+: bracket [N+] without any H
+        # Q — quaternary N+: bracket [N+] without any H, excluding nitro /
+        #     N-oxide nitrogens (a nitro N is not a quaternary ammonium)
         if is_bracket:
-            inner = tok[1:-1]
-            if inner.startswith("N+") and "H" not in inner:
+            if inner.startswith("N+") and "H" not in inner and not _is_nitro_or_noxide_nitrogen(tokens, i):
                 counts[7] += 1  # Q
 
         # E — carbonyl: any '=O' bond where the other atom is C/c.
@@ -3321,11 +3872,14 @@ def _compute_pharmacophore_counts(smiles: str) -> np.ndarray:
         # S — sulfur: bare S/s, or bracket atom starting with S
         if tok in ("S", "s"):
             counts[10] += 1  # S
-        elif is_bracket and tok[1:2] in ("S", "s"):
+        elif is_bracket and inner[:1] in ("S", "s"):
             counts[10] += 1  # S
 
-        # G — ring closure: single digit 1-9, or %NN token
-        if (len(tok) == 1 and tok.isdigit() and tok != "0") or tok.startswith("%"):
+        # G — ring closure: single digit 0-9, or %NN token. Ring-bond number
+        # 0 is legal SMILES (just unconventional -- generators normally start
+        # at 1), so it must count like any other digit; excluding it (the
+        # original implementation) undercounts G for any SMILES using it.
+        if (len(tok) == 1 and tok.isdigit()) or tok.startswith("%"):
             counts[11] += 1  # G
 
     return counts
@@ -3352,10 +3906,17 @@ def pharmacophoric_fingerprint(
     canonicalize: bool = True,
 ) -> np.ndarray:
     """
-    PhaSMIfp: 78D pharmacophoric SMILES fingerprint.
+    PhaSMIfp: 12-dimensional pharmacophoric class count vector,
+    deterministically expanded to 78 dimensions via pairwise min
+    co-occurrence terms.
 
-    Computes a 12D pharmacophoric class count vector and a 66D pairwise
-    co-occurrence vector, concatenated into a single 78D hologram.
+    The [12:78] pairwise layer is a fixed, deterministic function of the
+    [0:12] counts (``min(count_i, count_j)``, or in ``output='binary'`` mode
+    simply the pairwise AND of the 12 presence bits) -- it carries no
+    information beyond those 12 numbers. Describe this as a 12D count vector
+    expanded to 78D so linear/distance-based methods can exploit feature
+    co-occurrence, not as "a 78D descriptor" -- the intrinsic dimensionality
+    is 12, and a reviewer checking the construction will find exactly that.
 
     Layers:
         [0:12]   12D — per-class counts (D, A, R, T, L, P, M, Q, E, X, S, G)
@@ -3446,7 +4007,11 @@ def coral_global_fingerprint(smiles: str, preprocess: bool = True) -> np.ndarray
       - heteroatoms: N, O, S, P                                  [4 bits]
       - halogens: F, Cl, Br                                      [3 bits]
       - heteroatom/halogen co-occurrence pairs (C(7,2))          [21 bits]
-    Total dimensionality: 31.
+    Total dimensionality: 31, but the 21 co-occurrence bits are a
+    deterministic function (pairwise AND) of the other 10 presence bits and
+    carry no independent information -- intrinsic dimensionality is 10.
+    Describe this as a 10D presence vector expanded to 31D, not "a 31D
+    descriptor".
 
     Unlike SMIfp (character counts) or the BPE-pattern fingerprint (local
     multi-atom fragments), this fingerprint captures coarse, whole-molecule
@@ -3479,7 +4044,12 @@ def coral_global_fingerprint(smiles: str, preprocess: bool = True) -> np.ndarray
         smiles = preprocess_smiles(smiles)
 
     bond_bits = [1.0 if ch in smiles else 0.0 for ch in CORAL_BOND_CHARS]
-    nosp_bits = [1.0 if el in smiles else 0.0 for el in CORAL_NOSP_ELEMENTS]
+    # Check both the uppercase (aliphatic) and lowercase (aromatic) SMILES
+    # symbol for each heteroatom -- pyridine's ring nitrogen is written "n",
+    # never "N", so checking uppercase only makes this bit blind to aromatic
+    # N/O/S/P entirely (furan, thiophene, and every N-heteroaromatic, which
+    # dominate RNA-binder chemotypes, previously scored has_N = 0 etc.).
+    nosp_bits = [1.0 if (el in smiles or el.lower() in smiles) else 0.0 for el in CORAL_NOSP_ELEMENTS]
     halo_bits = [1.0 if el in smiles else 0.0 for el in CORAL_HALO_ELEMENTS]
 
     presence = halo_bits + nosp_bits  # matches CORAL_ATOMPAIR_ELEMENTS order
@@ -3975,9 +4545,62 @@ AVAILABLE_METHODS = {
 # Used by compute_similarity_matrix to decide whether the upper triangle may be
 # mirrored into the lower triangle.  lingo_tversky and spectrum_tversky default to
 # alpha=0.9, beta=0.1 (query-weighted); monge_elkan is asymmetric by construction
-# (averages over smiles1's tokens). Their _sym / dice / overlap variants are
-# symmetric and are not listed.
-ASYMMETRIC_METHODS = {"lingo_tversky", "spectrum_tversky", "monge_elkan"}
+# (averages over smiles1's tokens). clcs is asymmetric only for same-length,
+# differently-ordered pairs (mclcs1_length must pick one of the two equal-length
+# strings as the "shorter" prefix donor -- see its docstring); listing it here
+# means the batch matrix always evaluates both directions instead of assuming
+# symmetry, which would be wrong specifically for those pairs. Their _sym / dice
+# / overlap variants are symmetric and are not listed.
+ASYMMETRIC_METHODS = {"lingo_tversky", "spectrum_tversky", "monge_elkan", "clcs"}
+
+# Methods whose function signature declares a ``preprocess`` parameter that the
+# function itself does not act on: their tokenizer (Schwaller atom-level for
+# monge_elkan/token_edit) already recognises multi-character atoms directly on
+# raw text, so preprocess_smiles-rewriting the corpus ahead of time in
+# _build_batch_kwargs only relabels characters the tokenizer would have handled
+# anyway. For monge_elkan specifically this is not just wasted work: its
+# default secondary similarity (character-edit distance) compares token *text*,
+# so feeding it "L"/"R" sentinels instead of raw "Cl"/"Br" silently changes the
+# score, making the batch matrix disagree with a direct per-pair call on the
+# same strings. Skipping the rewrite for these methods keeps batch and
+# per-pair results identical (see TestPreprocessIgnoringMethodsBatchAgreement).
+_PREPROCESS_IGNORING_METHODS = {"token_edit", "monge_elkan", "monge_elkan_sym"}
+
+# Mismatch-kernel family: see corpus_alphabet()'s docstring for why
+# _build_batch_kwargs pins a dataset-wide alphabet for these instead of
+# letting mismatch_kernel_similarity fall back to its per-pair default.
+_MISMATCH_METHODS = {"mismatch", "mismatch3", "mismatch5"}
+
+# Methods that blank ring-closure digits by default (Öztürk et al. 2016
+# specify this for LINGO).  Ring-digit normalization is meaningful *only* for
+# SMILES: elsewhere a digit is not a ring label, and blanking every digit
+# outside bracket atoms destroys the representation itself.  An InChI has no
+# bracket atoms at all and its connection layer is almost nothing but digits,
+# so benzene's 'C6H6/c1-2-4-6-5-3-1/h1-6H' and pyridine's
+# 'C5H5N/c1-2-4-6-5-3-1/h1-5H' both collapse to the same connection string
+# '/c0-0-0-0-0-0-0' -- measured on aspirin vs. caffeine InChIs, lingo scored
+# 0.33 with digits blanked versus 0.018 with them kept.  main() therefore
+# passes ``normalize_rings=False`` for these methods whenever the input is not
+# SMILES, exactly as it already does for ``preprocess``; call sites in library
+# code must pass it themselves (see get_lingos).  Only the LINGO family is
+# listed: spectrum/mismatch expose the same flag but already default to False.
+#
+# Note this set is also the guard that keeps the flag from reaching methods
+# that cannot accept it: several registry entries are ``**kw``-forwarding
+# lambdas whose target has no ``normalize_rings`` parameter (e.g. smifp38_cbd
+# -> smifp_similarity_cityblock), so _build_batch_kwargs' signature filter
+# does not stop it and the call would raise TypeError.
+_RING_NORMALIZING_METHODS = {
+    "lingo",
+    "lingo3",
+    "lingo5",
+    "lingo_tversky",
+    "lingo_tversky_sym",
+    "lingo_dice",
+    "lingo_ruzicka",
+    "lingo_jaccard_binary",
+    "lingo_dice_binary",
+}
 
 
 def is_symmetric_method(method: str, kwargs: Optional[dict] = None) -> bool:
@@ -4098,10 +4721,33 @@ def _build_batch_kwargs(sim_func, method: str, corpus: List[str], kwargs: dict) 
         filtered = {}
         params = {}
 
+    # Mismatch kernel: pin the alphabet across the whole corpus (unless the
+    # caller already supplied one) so every pair in this batch expands over
+    # the same feature space instead of mismatch_kernel_similarity's per-pair
+    # default -- see corpus_alphabet()'s docstring for why a per-pair alphabet
+    # is not a valid, comparable kernel across a screening run. Must run
+    # before the preprocess block below and use the original *corpus*
+    # argument directly: these methods are registered via a ``**kw``-wrapping
+    # lambda (see AVAILABLE_METHODS), so ``"preprocess" in params`` below is
+    # False for them (the lambda's own signature has no named ``preprocess``
+    # parameter) and the corpus is never rewritten by that block.
+    if method in _MISMATCH_METHODS and "alphabet" not in kwargs:
+        alphabet_strings = corpus
+        if kwargs.get("preprocess", True):
+            alphabet_strings = [preprocess_smiles(s) for s in alphabet_strings]
+        if kwargs.get("normalize_rings", False):
+            alphabet_strings = [normalize_ring_numbers(s) for s in alphabet_strings]
+        filtered = {**filtered, "alphabet": corpus_alphabet(alphabet_strings, preprocess=False)}
+
     # Preprocess each string once rather than once per pair.  Rebind rather than
     # mutate in place: the caller uses the returned list, so an in-place side
     # effect on the argument would be surprising and is not relied upon.
-    if filtered.get("preprocess", True) and "preprocess" in params:
+    # Skipped for methods whose tokenizer already recognises multi-character
+    # atoms on raw text and ignores this flag internally (see
+    # _PREPROCESS_IGNORING_METHODS) -- rewriting the corpus for them changes
+    # nothing they use correctly and, for monge_elkan, silently changes the
+    # result because its secondary similarity compares token text directly.
+    if filtered.get("preprocess", True) and "preprocess" in params and method not in _PREPROCESS_IGNORING_METHODS:
         corpus = [preprocess_smiles(s) for s in corpus]
         filtered = {**filtered, "preprocess": False}
 
@@ -4149,11 +4795,16 @@ def _build_batch_kwargs(sim_func, method: str, corpus: List[str], kwargs: dict) 
 # to the per-pair path unchanged.
 
 
-def _combine_lingo_sim(c1: Counter, c2: Counter) -> float:
+def _combine_lingo_sim(f1: Tuple[str, Counter], f2: Tuple[str, Counter]) -> float:
     """Averaged per-q-gram agreement (mirrors :func:`lingo_similarity`)."""
+    s1, c1 = f1
+    s2, c2 = f2
     all_keys = set(c1) | set(c2)
     if not all_keys:
-        return 1.0
+        # Both strings shorter than q; compare the normalized strings rather
+        # than returning an unconditional 1.0 -- see lingo_similarity's
+        # matching branch (and _lingo_normalized_string) for why.
+        return 1.0 if s1 == s2 else 0.0
     total = 0.0
     for lg in all_keys:
         n1 = c1.get(lg, 0)
@@ -4167,9 +4818,11 @@ def _combine_lingo_sim(c1: Counter, c2: Counter) -> float:
 def _make_combine_tversky(alpha: float, beta: float) -> Callable:
     """Multiset Tversky on q-gram counts (mirrors :func:`lingo_tversky_similarity`)."""
 
-    def _combine(c1: Counter, c2: Counter) -> float:
+    def _combine(f1: Tuple[str, Counter], f2: Tuple[str, Counter]) -> float:
+        s1, c1 = f1
+        s2, c2 = f2
         if not c1 and not c2:
-            return 1.0
+            return 1.0 if s1 == s2 else 0.0
         if not c1 or not c2:
             return 0.0
         intersection = only1 = only2 = 0
@@ -4185,11 +4838,26 @@ def _make_combine_tversky(alpha: float, beta: float) -> Callable:
     return _combine
 
 
+def _lingo_batch_normalizer(params: dict) -> Callable[[str], str]:
+    """
+    Return the per-string ring-digit normalizer the LINGO featurizers should
+    apply, honouring a ``normalize_rings=False`` override (the CLI sets this
+    for non-SMILES input — see :data:`_RING_NORMALIZING_METHODS`).  Keeping
+    this in one place is what makes the fast path agree bit-for-bit with the
+    per-pair functions, which take the same flag.
+    """
+    if params.get("normalize_rings", True):
+        return normalize_ring_numbers
+    return lambda s: s
+
+
 def _make_lingo_batch(params: dict) -> Tuple[Callable, Callable]:
     q = params.get("q", 4)
+    normalize = _lingo_batch_normalizer(params)
 
-    def featurize(s: str) -> Counter:
-        return get_lingos(s, q=q, normalize_rings=True, preprocess=False)
+    def featurize(s: str) -> Tuple[str, Counter]:
+        norm = normalize(s)
+        return norm, get_lingos(norm, q=q, normalize_rings=False, preprocess=False)
 
     return featurize, _combine_lingo_sim
 
@@ -4197,13 +4865,17 @@ def _make_lingo_batch(params: dict) -> Tuple[Callable, Callable]:
 def _make_lingo_binary_batch(params: dict, metric: str) -> Tuple[Callable, Callable]:
     """Binary (set) Jaccard/Dice on LINGO q-grams; mirrors :func:`lingo_jaccard_binary_similarity`/`lingo_dice_binary_similarity`."""
     q = params.get("q", 4)
+    normalize = _lingo_batch_normalizer(params)
 
-    def featurize(s: str) -> frozenset:
-        return frozenset(get_lingos(s, q=q, normalize_rings=True, preprocess=False))
+    def featurize(s: str) -> Tuple[str, frozenset]:
+        norm = normalize(s)
+        return norm, frozenset(get_lingos(norm, q=q, normalize_rings=False, preprocess=False))
 
-    def combine(set1: frozenset, set2: frozenset) -> float:
+    def combine(f1: Tuple[str, frozenset], f2: Tuple[str, frozenset]) -> float:
+        s1, set1 = f1
+        s2, set2 = f2
         if not set1 and not set2:
-            return 1.0
+            return 1.0 if s1 == s2 else 0.0
         if not set1 or not set2:
             return 0.0
         intersection = len(set1 & set2)
@@ -4220,9 +4892,11 @@ def _make_tversky_batch(params: dict, alpha: Optional[float] = None, beta: Optio
     q = params.get("q", 4)
     a = alpha if alpha is not None else params.get("alpha", 0.9)
     b = beta if beta is not None else params.get("beta", 0.1)
+    normalize = _lingo_batch_normalizer(params)
 
-    def featurize(s: str) -> Counter:
-        return get_lingos(s, q=q, normalize_rings=True, preprocess=False)
+    def featurize(s: str) -> Tuple[str, Counter]:
+        norm = normalize(s)
+        return norm, get_lingos(norm, q=q, normalize_rings=False, preprocess=False)
 
     return featurize, _make_combine_tversky(a, b)
 
@@ -4351,10 +5025,12 @@ def _make_ncd_batch(params: dict) -> Tuple[Callable, Callable]:
     def combine(f1, f2) -> float:
         s1, a, c_a = f1
         s2, b, c_b = f2
-        if not s1 or not s2:
-            return 0.0
+        # Equality checked before emptiness -- see ncd_similarity's matching
+        # comment (B6): both-empty must be 1.0 ("equal"), not 0.0.
         if s1 == s2:
             return 1.0
+        if not s1 or not s2:
+            return 0.0
         c_ab = _compress_bytes(a + sep + b)
         c_ba = _compress_bytes(b + sep + a)
         c_xy = min(c_ab, c_ba)
@@ -4423,7 +5099,40 @@ BATCH_FEATURIZERS: Dict[str, Callable[[dict], Tuple[Callable, Callable]]] = {
 }
 
 # User kwargs that legitimately override a method's feature parameters.
-_BATCH_PARAM_KEYS = ("q", "k", "coefficient", "alpha", "beta", "min_length", "n", "lam")
+_BATCH_PARAM_KEYS = ("q", "k", "coefficient", "alpha", "beta", "min_length", "n", "lam", "normalize_rings")
+
+
+def _apply_tfidf_zero_vector_convention(
+    result: np.ndarray,
+    row_vecs,
+    row_strings: List[str],
+    col_vecs,
+    col_strings: List[str],
+) -> np.ndarray:
+    """
+    Apply the per-pair "both vectors all-zero" convention to a batched TF-IDF
+    cosine matrix, in place.
+
+    ``cosine_similarity`` returns 0.0 whenever either side is an all-zero
+    vector, including when both sides are — which happens for any string with
+    fewer tokens than the method's ngram floor (with ``ngram_range=(4, 4)``,
+    "CCO" has no 4-gram at all).  Without this correction such a molecule
+    scores 0.0 even against an identical string, and the three code paths
+    disagree with each other: the per-pair function returns 1.0 (see
+    :func:`_tfidf_cosine_similarity`), ``compute_similarity_matrix``'s
+    diagonal is force-set to 1.0, and the cross matrix returned 0.0.  Only
+    zero-vector × zero-vector cells are touched (a zero vector against a
+    non-zero one is a genuine 0.0), so the loop runs over the usually-empty
+    set of degenerate strings, not the whole grid.
+    """
+    row_zero = np.flatnonzero(np.asarray(row_vecs.getnnz(axis=1)).ravel() == 0)
+    if row_zero.size == 0:
+        return result
+    col_zero = np.flatnonzero(np.asarray(col_vecs.getnnz(axis=1)).ravel() == 0)
+    for i in row_zero:
+        for j in col_zero:
+            result[i, j] = 1.0 if row_strings[i] == col_strings[j] else 0.0
+    return result
 
 
 def _resolve_batch_featurizer(method: str, kwargs: dict) -> Optional[Tuple[Callable, Callable]]:
@@ -4515,10 +5224,14 @@ def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", sym
     if vectorizer is not None and _tfidf_family(method) is not None:
         vecs = vectorizer.transform(smiles_list)
         result = sklearn_cosine_similarity(vecs, vecs)
+        # Short strings whose n-gram range yields an all-zero TF-IDF vector
+        # (e.g. ngram_range=(4,4) on a 1-token molecule) get cosine 0.0 even
+        # against an identical string; restore the module-wide degenerate-case
+        # convention for those cells, including the off-diagonal ones where the
+        # *same* string appears twice in smiles_list.
+        _apply_tfidf_zero_vector_convention(result, vecs, smiles_list, vecs, smiles_list)
         # The per-pair path force-sets self-similarity to 1.0 unconditionally
-        # (see the loop below); match that for short strings whose n-gram range
-        # yields an all-zero TF-IDF vector (e.g. ngram_range=(4,4) on a 1-token
-        # molecule), where cosine(0-vector, 0-vector) is otherwise 0.0, not 1.0.
+        # (see the loop below); match that exactly.
         np.fill_diagonal(result, 1.0)
         return result
 
@@ -4534,7 +5247,34 @@ def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", sym
     return sim_matrix
 
 
-def compute_cross_similarity_matrix(templates: List[str], library: List[str], method: str = "lingo", **kwargs) -> np.ndarray:
+def _cross_similarity_worker_chunk(method: str, filtered_kwargs: dict, templates_chunk: List[str], library: List[str]) -> np.ndarray:
+    """
+    Picklable, module-level worker for :func:`compute_cross_similarity_matrix`'s
+    ``n_jobs > 1`` path: computes one contiguous block of template columns
+    against the full library.
+
+    Takes the method *name* (a string), not the similarity function itself,
+    and re-resolves it via :func:`get_similarity_function` inside the worker
+    process. This is required, not a style choice: most :data:`AVAILABLE_METHODS`
+    entries are registered as closures/lambdas (to bake in fixed parameters
+    like ``q=3``), which the standard ``pickle`` module cannot serialize, and
+    neither the ``forkserver`` start method (this platform's default) nor
+    ``spawn`` (macOS/Windows) hands a worker process the parent's already-built
+    registry the way a plain ``fork`` would -- a worker can only safely receive
+    picklable data (strings, numbers, lists of strings) and must re-derive
+    everything else itself.
+    """
+    sim_func = get_similarity_function(method)
+    result = np.empty((len(library), len(templates_chunk)))
+    for i, lib_smiles in enumerate(library):
+        for j, template_smiles in enumerate(templates_chunk):
+            # template is the query (first arg) for asymmetric methods; see the
+            # matching comment in compute_cross_similarity_matrix.
+            result[i, j] = sim_func(template_smiles, lib_smiles, **filtered_kwargs)
+    return result
+
+
+def compute_cross_similarity_matrix(templates: List[str], library: List[str], method: str = "lingo", n_jobs: Optional[int] = None, **kwargs) -> np.ndarray:
     """
     Compute similarity matrix between templates and library molecules.
 
@@ -4546,6 +5286,19 @@ def compute_cross_similarity_matrix(templates: List[str], library: List[str], me
         List of library SMILES strings
     method : str
         Similarity method name
+    n_jobs : int or None
+        Number of worker processes to use for the general per-pair path
+        (default ``None`` / ``1``: sequential, identical to previous
+        behaviour). ``-1`` uses all available CPUs. Only affects methods
+        that fall through to the general per-pair path (``edit``, ``nlcs``,
+        ``clcs``, ``mismatch``, jellyfish-based methods, ...) -- the
+        featurize-once fast path and the batched TF-IDF path are already
+        vectorised/O(1)-per-pair and are computed sequentially regardless of
+        this setting, since process-pool overhead would outweigh any gain
+        there. Process-pool startup itself costs tens of milliseconds, so
+        ``n_jobs > 1`` is only worth it for large template x library grids
+        on slow (DP-bound) methods -- for a handful of templates/molecules,
+        leave this at the default.
     **kwargs : dict
         Additional arguments for the similarity function.  ``preprocess``
         is passed through only to functions whose signature accepts it;
@@ -4600,7 +5353,35 @@ def compute_cross_similarity_matrix(templates: List[str], library: List[str], me
     if vectorizer is not None and _tfidf_family(method) is not None:
         template_vecs = vectorizer.transform(templates)
         library_vecs = vectorizer.transform(library)
-        return sklearn_cosine_similarity(library_vecs, template_vecs)
+        result = sklearn_cosine_similarity(library_vecs, template_vecs)
+        # Same degenerate-case correction as the square path: a template that
+        # is also present in the library must not score 0.0 against itself
+        # just because it is too short to produce a single n-gram.
+        return _apply_tfidf_zero_vector_convention(result, library_vecs, library, template_vecs, templates)
+
+    # Parallel general path: split templates into contiguous column blocks,
+    # each computed by a separate worker process against the full library
+    # (see _cross_similarity_worker_chunk for why the worker takes the method
+    # *name*, not sim_func itself). Only reached for the DP-bound methods that
+    # fall through to here in the first place -- the fast/TF-IDF paths above
+    # already returned.
+    workers = 0
+    if n_jobs is not None and n_jobs != 1 and n_templates > 0:
+        import os
+
+        workers = (os.cpu_count() or 1) if n_jobs == -1 else n_jobs
+        workers = max(1, min(workers, n_templates))
+    if workers > 1:
+        import concurrent.futures
+
+        chunk_indices = [c for c in np.array_split(np.arange(n_templates), workers) if len(c) > 0]
+        with concurrent.futures.ProcessPoolExecutor(max_workers=len(chunk_indices)) as executor:
+            futures = [
+                executor.submit(_cross_similarity_worker_chunk, method, filtered_kwargs, templates[idx[0] : idx[-1] + 1], library)
+                for idx in chunk_indices
+            ]
+            column_blocks = [f.result() for f in futures]
+        return np.hstack(column_blocks)
 
     for i, lib_smiles in enumerate(library):
         for j, template_smiles in enumerate(templates):
@@ -4949,7 +5730,7 @@ Examples:
   # Convert to InChI; disable SMILES preprocessing so InChI strings are not corrupted
   python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method lingo --inchi --no-preprocess
 
-  # Shuffle characters after conversion (negative control — destroys chemistry)
+  # Shuffle characters after conversion (ordering ablation — destroys order, keeps composition)
   python smiles_similarity_kernels.py --templates templates.smi --database library.smi --output output.csv --method lingo --shuffle
 
   # Reproducible shuffle with fixed seed
@@ -5105,8 +5886,9 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
     aug_group.add_argument(
         "--shuffle",
         action="store_true",
-        help="Randomly shuffle characters in each string (type-agnostic negative control). "
-        "Destroys chemical meaning while preserving length and character composition.",
+        help="Randomly shuffle characters in each string (type-agnostic ordering ablation). "
+        "Destroys character *order* while preserving length and character composition exactly, so the drop "
+        "from the unshuffled score measures how much of a method's signal comes from ordering. Not a null/random baseline.",
     )
     aug_group.add_argument(
         "--shuffle-seed",
@@ -5118,8 +5900,9 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
     aug_group.add_argument(
         "--sort",
         action="store_true",
-        help="Sort characters of each string alphabetically (deterministic negative control). "
-        "Destroys chemical meaning while preserving length and character composition.",
+        help="Sort characters of each string alphabetically (deterministic ordering ablation, no seed needed). "
+        "Collapses every molecule with the same character multiset onto one string, so it measures composition-only "
+        "similarity and can score HIGHER than the unsorted metric. Not a lower bound.",
     )
 
     # ── FINGERPRINT ────────────────────────────────────────────────────────────
@@ -5145,6 +5928,17 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
 
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress information")
     parser.add_argument("--timing-log", default=None, metavar="FILE", help="Append per-method timing rows (CSV) to FILE")
+    parser.add_argument(
+        "--jobs",
+        "-j",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Number of worker processes for per-pair similarity computation (default: 1 = sequential; -1 = all CPUs). "
+        "Only speeds up methods that fall through to the general per-pair path (edit, nlcs, clcs, mismatch, jellyfish-based "
+        "methods, ...); vectorized/featurize-once methods (lingo*, spectrum*, smifp*, tok-*_tfidf*, ...) are already fast "
+        "and run sequentially regardless of this flag.",
+    )
     parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite existing output files. Without this flag, existing files are skipped with a warning."
     )
@@ -5174,6 +5968,42 @@ def _parse_col_arg(col_arg: Optional[str]) -> Optional[Union[int, str]]:
         return int(col_arg)
     except ValueError:
         return col_arg
+
+
+def _resolve_fingerprint_kwargs(fp_func: Callable, preprocess: bool, canonicalize: bool) -> dict:
+    """
+    Work out which of ``preprocess=``/``canonicalize=`` *fp_func* actually
+    accepts, and return exactly that subset with the CLI's requested values.
+
+    Every :data:`AVAILABLE_FINGERPRINTS` entry that supports these options
+    forwards them through a ``lambda smi, **kw: real_func(smi, ..., **kw)``
+    wrapper (to bake in fixed params like ``chars=``/``output=``), so
+    ``inspect.signature(fp_func)`` only ever sees ``(smi, **kw)`` -- the
+    wrapper's real target and its accepted keywords are invisible to
+    introspection. Probing with an actual call (cheap: a single one-character
+    "C" fingerprint, once per ``--fingerprint`` run, not per molecule) finds
+    the right combination regardless of how many wrapper layers are in the
+    way, which a naive ``"preprocess" in inspect.signature(fp_func).parameters``
+    check would get wrong for every wrapped entry (e.g. ``smifp38``,
+    ``phasmifp_binary``, ``bpe512_count``).
+    """
+    for kwargs in (
+        {"preprocess": preprocess, "canonicalize": canonicalize},
+        {"preprocess": preprocess},
+        {"canonicalize": canonicalize},
+        {},
+    ):
+        try:
+            fp_func("C", **kwargs)
+            return kwargs
+        except TypeError:
+            continue
+        except (FileNotFoundError, ImportError):
+            # Not a kwargs-compatibility problem (e.g. a missing BPE vocab
+            # file) -- stop probing and let the real per-molecule call raise
+            # the same error where the caller already handles it cleanly.
+            break
+    return {}
 
 
 def main():
@@ -5267,7 +6097,19 @@ def main():
 
         try:
             fp_func = get_fingerprint_function(args.fingerprint)
-            fps = [fp_func(smi) for smi in lib_smiles]
+            # Mirror similarity mode's representation pipeline: preprocess is
+            # SMILES-only and off for --inchi/--selfies; canonicalize is only
+            # ever applied when the user actually asked for it (previously a
+            # fingerprint function like pharmacophoric_fingerprint always
+            # canonicalized internally by its own default, unreachable from
+            # here -- --no-preprocess and not passing --canonicalize were both
+            # silently ignored in fingerprint mode).
+            fp_preprocess = string_type == "smiles" and not args.no_preprocess
+            fp_canonicalize = bool(args.canonicalize) and string_type == "smiles"
+            fp_kwargs = _resolve_fingerprint_kwargs(fp_func, fp_preprocess, fp_canonicalize)
+            if args.verbose:
+                print(f"[normalize] fingerprint kwargs: {fp_kwargs}")
+            fps = [fp_func(smi, **fp_kwargs) for smi in lib_smiles]
         except (ImportError, FileNotFoundError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -5395,18 +6237,20 @@ def main():
     if args.verbose and string_type == "smiles":
         state = "on" if preprocess else "off (--no-preprocess)"
         print(f"[normalize] ELEMENT_REPLACEMENTS: {state}")
+    if args.verbose and string_type != "smiles":
+        print(f"[normalize] ring-digit normalization: off for string type '{string_type}' (LINGO-family methods only)")
 
     # ── AUGMENT (stage 4) ─────────────────────────────────────────────────────
     if args.shuffle:
         if args.verbose:
             seed_msg = f"seed={args.shuffle_seed}" if args.shuffle_seed is not None else "no seed"
-            print(f"[augment] shuffling strings ({seed_msg}) — negative control")
+            print(f"[augment] shuffling strings ({seed_msg}) — ordering ablation")
         template_strings = [shuffle_smiles(s, seed=args.shuffle_seed) for s in template_strings]
         library_strings = [shuffle_smiles(s, seed=args.shuffle_seed) for s in library_strings]
 
     if args.sort:
         if args.verbose:
-            print("[augment] sorting strings alphabetically — deterministic negative control")
+            print("[augment] sorting strings alphabetically — deterministic ordering ablation")
         template_strings = [sort_string(s) for s in template_strings]
         library_strings = [sort_string(s) for s in library_strings]
 
@@ -5458,10 +6302,17 @@ def main():
                 continue
 
         extra_kwargs = {"preprocess": preprocess}
+        # Ring-digit normalization is SMILES-only, for the same reason
+        # ELEMENT_REPLACEMENTS preprocessing is: on an InChI (or SELFIES)
+        # string a digit is not a ring-closure label, and blanking digits
+        # deletes the representation's actual content -- see
+        # _RING_NORMALIZING_METHODS for the measured effect.
+        if string_type != "smiles" and method in _RING_NORMALIZING_METHODS:
+            extra_kwargs["normalize_rings"] = False
 
         try:
             _t0 = time.perf_counter()
-            sim_matrix = compute_cross_similarity_matrix(template_strings, library_strings, method=method, **extra_kwargs)
+            sim_matrix = compute_cross_similarity_matrix(template_strings, library_strings, method=method, n_jobs=args.jobs, **extra_kwargs)
             _elapsed = time.perf_counter() - _t0
         except ImportError as exc:
             if multi_output:

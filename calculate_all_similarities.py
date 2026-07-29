@@ -7,7 +7,9 @@ write one CSV per method per variant.
 Pipeline stages applied per variant:
     [convert]   --inchi / --selfies / (none = keep SMILES)
     [normalize] --canonicalize (SMILES only); ELEMENT_REPLACEMENTS auto on/off
-    [augment]   --shuffle (random negative control) / --sort (deterministic negative control)
+    [augment]   --shuffle (random ordering ablation) / --sort (deterministic ordering ablation)
+                (NOT a random/null baseline -- both preserve character composition;
+                see smiles_similarity_kernels.py's shuffle_smiles/sort_string docstrings)
 
 Output file naming:
     {representation}__{modifiers}__{method}.csv
@@ -167,7 +169,7 @@ VARIANTS = [
         "modifiers": ["replaced", "shuffled"],
         "extra_args": ["--shuffle", "--shuffle-seed", "42"],
         "requires": [],
-        "description": "shuffled SMILES, negative control (seed=42)",
+        "description": "shuffled SMILES, ordering ablation (seed=42)",
         "stage": "augment",
     },
     {
@@ -175,7 +177,7 @@ VARIANTS = [
         "modifiers": ["replaced", "sorted"],
         "extra_args": ["--sort"],
         "requires": [],
-        "description": "sorted SMILES, deterministic negative control",
+        "description": "sorted SMILES, deterministic ordering ablation",
         "stage": "augment",
     },
     # ── InChI variants ─────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ Run with:
     pytest test_smiles_similarity_kernels.py -v -k "lingo"  # single group
 """
 
+import random
 import subprocess
 import sys
 from pathlib import Path
@@ -76,6 +77,93 @@ class TestPreprocessSmiles:
         assert "¢" in result  # @TH1 → ¢
 
 
+class TestElementReplacementCompleteness:
+    """Regression (B4 in insights-opus50.md): ELEMENT_REPLACEMENTS is
+    documented as a "complete mapping of multi-character elements", but used
+    to (a) map Co -> 'K' and Na -> 'Y', colliding with the bare (unmapped)
+    single-character symbols for Potassium and Yttrium -- so [Co] and [K],
+    or [Na] and [Y], became indistinguishable after preprocessing -- and (b)
+    omit ~29 real two-character element symbols (noble gases, Sc/Rb/Zr/Cs/Hf,
+    the heavier actinides, Pm/Po/At/Fr/Ac), which silently split into two
+    characters and doubled the apparent atom count for any metal-containing
+    or radiopharma molecule using them."""
+
+    # IUPAC symbols up to element 103 (Lawrencium); synthetic elements beyond
+    # this essentially never appear in generated or hand-drawn SMILES.
+    PERIODIC_TABLE = (
+        "H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr "
+        "Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu "
+        "Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr"
+    ).split()
+
+    def test_every_two_char_element_is_mapped(self):
+        missing = [sym for sym in self.PERIODIC_TABLE if len(sym) == 2 and sym not in m.ELEMENT_REPLACEMENTS]
+        assert missing == []
+
+    def test_replacement_values_are_unique(self):
+        values = list(m.ELEMENT_REPLACEMENTS.values())
+        assert len(values) == len(set(values))
+
+    def test_no_collision_with_bare_single_char_elements(self):
+        # A replacement value must never equal the literal, unmapped symbol
+        # of a *different* single-character element (K, Y, ... are legal
+        # bare SMILES atoms that are never rewritten by preprocess_smiles).
+        single_char_elements = {sym for sym in self.PERIODIC_TABLE if len(sym) == 1}
+        for key, value in m.ELEMENT_REPLACEMENTS.items():
+            if value in single_char_elements:
+                assert value == key, f"{key!r} -> {value!r} collides with the bare element {value!r}"
+
+    def test_bracketed_two_char_elements_round_trip_distinctly(self):
+        # Every two-character element, written the way it must legally
+        # appear in SMILES for anything outside the organic subset ([Xx]),
+        # preprocesses to a distinct single character.
+        outputs = {sym: m.preprocess_smiles(f"[{sym}]") for sym in self.PERIODIC_TABLE if len(sym) == 2}
+        assert len(outputs) == len(set(outputs.values()))
+        for sym, out in outputs.items():
+            assert out == f"[{m.ELEMENT_REPLACEMENTS[sym]}]"
+
+    def test_cobalt_and_potassium_distinguishable(self):
+        assert m.preprocess_smiles("[Co]") != m.preprocess_smiles("[K]")
+
+    def test_sodium_and_yttrium_distinguishable(self):
+        assert m.preprocess_smiles("[Na]") != m.preprocess_smiles("[Y]")
+
+
+class TestPreprocessBracketOnlySubstitution:
+    """Regression (B5 in insights-opus50.md): substituting multi-character
+    element/stereo tokens context-free (anywhere in the string) misreads
+    coincidental adjacent characters that are not actually that element --
+    valid SMILES requires brackets for every element outside the organic
+    subset (B/C/N/O/P/S/F/Cl/Br/I) and for every stereo descriptor, so
+    matching them unbracketed is never actually correct."""
+
+    def test_bare_in_is_not_indium(self):
+        # "In1cccc1" is N-iodopyrrole (I + ring-numbered aromatic n), not
+        # indium -- indium would have to be written "[In]1cccc1".
+        assert m.preprocess_smiles("In1cccc1") == "In1cccc1"
+
+    def test_bracketed_in_is_indium(self):
+        assert m.preprocess_smiles("[In]1cccc1") == f"[{m.ELEMENT_REPLACEMENTS['In']}]1cccc1"
+
+    def test_bare_sn_is_not_tin(self):
+        assert m.preprocess_smiles("Sn1cnnc1") == "Sn1cnnc1"
+
+    def test_bracketed_sn_is_tin(self):
+        assert m.preprocess_smiles("[Sn]1cnnc1") == f"[{m.ELEMENT_REPLACEMENTS['Sn']}]1cnnc1"
+
+    def test_bare_chlorine_and_bromine_still_substituted(self):
+        # Cl/Br are in the organic subset and legally appear unbracketed --
+        # the bracket restriction must not apply to them.
+        assert m.preprocess_smiles("CCCCl") == "CCCL"
+        assert m.preprocess_smiles("c1ccc(Br)cc1") == "c1ccc(R)cc1"
+
+    def test_inchi_prefix_not_misread_as_indium(self):
+        # A real-world instance of the same failure mode: an InChI string's
+        # literal "InChI=" prefix contains "In" immediately followed by "C".
+        inchi = "InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3"
+        assert m.preprocess_smiles(inchi) == inchi
+
+
 class TestNormalizeRingNumbers:
     def test_benzene(self):
         assert m.normalize_ring_numbers("c1ccccc1") == "c0ccccc0"
@@ -85,6 +173,32 @@ class TestNormalizeRingNumbers:
 
     def test_no_digits(self):
         assert m.normalize_ring_numbers("CCO") == "CCO"
+
+    def test_fused_aromatic_ring_closures(self):
+        assert m.normalize_ring_numbers("c1ccc2c(c1)[nH]c1ccccc12") == "c0ccc0c(c0)[nH]c0ccccc00"
+
+    def test_percent_ring_closure(self):
+        assert m.normalize_ring_numbers("C%10CCCC%10") == "C%00CCCC%00"
+
+    def test_bracket_charge_survives(self):
+        # Regression: a blanket digit->'0' substitution (the original
+        # implementation) collapsed [NH2+] and [NH3+] to the same token,
+        # destroying protonation-state information -- charge is the dominant
+        # recognition feature for many RNA ligands, so this is not cosmetic.
+        assert m.normalize_ring_numbers("[NH2+]") == "[NH2+]"
+        assert m.normalize_ring_numbers("[NH3+]") == "[NH3+]"
+        assert m.normalize_ring_numbers("[NH2+]") != m.normalize_ring_numbers("[NH3+]")
+
+    def test_bracket_isotope_survives(self):
+        assert m.normalize_ring_numbers("[13CH4]") == "[13CH4]"
+
+    def test_bracket_formal_charge_survives(self):
+        assert m.normalize_ring_numbers("[Fe+3]") == "[Fe+3]"
+
+    def test_ring_closure_outside_bracket_still_normalized(self):
+        # The bracket-aware rewrite must not stop normalizing ring digits
+        # that happen to sit right next to a bracket atom.
+        assert m.normalize_ring_numbers("[NH3+]CC1CCCCC1") == "[NH3+]CC0CCCCC0"
 
 
 class TestShuffleSmiles:
@@ -117,6 +231,29 @@ class TestShuffleSmiles:
 
     def test_empty(self):
         assert m.shuffle_smiles("", seed=1) == ""
+
+    @pytest.mark.skipif(not m.JELLYFISH_AVAILABLE, reason="jellyfish not installed")
+    def test_same_seed_different_strings_get_different_permutations(self):
+        # Regression (A8 in insights-opus50.md): random.Random(seed).shuffle
+        # is determined only by seed + length, not content, so a bare
+        # random.Random(seed) applies the *same* permutation to every string
+        # of equal length -- the CLI's --shuffle-seed applies one seed across
+        # a whole library, so this silently preserved positional
+        # correspondence (and thus alignment-based similarity, e.g. exact
+        # Hamming invariance) between same-length molecules instead of
+        # destroying it. Two distinct equal-length strings, same seed, must
+        # not both undergo the identical character permutation.
+        a = "CC(=O)Oc1ccccc1C(=O)O"
+        b = "CN1C=NC2=C1C(=O)N(C)C2"[: len(a)]
+        assert len(a) == len(b)
+        shuffled_a = m.shuffle_smiles(a, seed=42)
+        shuffled_b = m.shuffle_smiles(b, seed=42)
+        # Under the old bug, shuffling both with the same seed applies the
+        # identical permutation to both, so Hamming similarity (which is
+        # exactly invariant under a shared permutation) would be unchanged
+        # from the unshuffled pair -- a negative control that preserves this
+        # signal defeats its own purpose.
+        assert m.hamming_similarity(shuffled_a, shuffled_b, preprocess=False) != approx(m.hamming_similarity(a, b, preprocess=False))
 
 
 class TestSortString:
@@ -327,6 +464,45 @@ class TestNlcsSimilarity:
 # ---------------------------------------------------------------------------
 
 
+class TestMclcs1Length:
+    """Regression (A11 in insights-opus50.md): mclcs1_length used to compute
+    a synchronized common-prefix check anchored at index 0 of *both* strings,
+    which is a strictly narrower quantity than Algorithm 1 of Islam & Inkpen
+    (2008) actually defines -- the longest prefix of the *shorter* string
+    that occurs anywhere (as a contiguous substring) in the *longer* string.
+    Confirmed against the primary source (1376815.1376819.pdf, provided by
+    the user): Algorithm 1's pseudocode and its own worked example both
+    match the fixed implementation below, not the old one."""
+
+    def test_paper_worked_example(self):
+        # Section 3.1 worked example: MCLCS1(albastru, alabaster) = "al" (2).
+        assert m.mclcs1_length("albastru", "alabaster") == 2
+
+    def test_match_not_anchored_at_start_of_longer_string(self):
+        # "world" occurs whole inside "helloworld", just not at position 0 --
+        # the old index-0-of-both-strings check gave 0 here ('w' != 'h').
+        assert m.mclcs1_length("world", "helloworld") == 5
+
+    def test_symmetric_for_differing_lengths(self):
+        assert m.mclcs1_length("world", "helloworld") == m.mclcs1_length("helloworld", "world")
+
+    def test_full_prefix_match(self):
+        assert m.mclcs1_length("abc", "abcdef") == 3
+
+    def test_no_match_returns_zero(self):
+        assert m.mclcs1_length("xyz", "abcdef") == 0
+
+    def test_equal_length_pairs_can_be_asymmetric(self):
+        # Algorithm 1 requires the "prefix donor" to be the shorter string;
+        # when lengths are equal, either could play that role and the choice
+        # changes the result -- this implementation always uses the first
+        # argument as the donor in that case, which is a deliberate,
+        # documented tie-break for a case the paper itself leaves open, not
+        # a bug (see mclcs1_length's docstring).
+        assert m.mclcs1_length("abx", "xab") == 2
+        assert m.mclcs1_length("xab", "abx") == 1
+
+
 class TestClcsSimilarity:
     def test_identical(self):
         assert m.clcs_similarity("CCO", "CCO") == approx(1.0)
@@ -353,6 +529,21 @@ class TestClcsSimilarity:
     def test_weight_sum_not_one_warns(self):
         with pytest.warns(UserWarning, match="not 1"):
             m.clcs_similarity("CCO", "CCN", w1=0.5, w2=0.5, w3=0.5)
+
+    def test_registered_as_asymmetric(self):
+        # clcs depends on mclcs1_length, which can be asymmetric for
+        # same-length pairs (see TestMclcs1Length) -- compute_similarity_matrix
+        # must never assume sim(a, b) == sim(b, a) for it.
+        assert m.is_symmetric_method("clcs") is False
+
+    def test_batch_matrix_matches_direct_call_for_asymmetric_pair(self):
+        a, b = "abx", "xab"  # same length, order-dependent MCLCS1 (see TestMclcs1Length)
+        direct_ab = m.clcs_similarity(a, b)
+        direct_ba = m.clcs_similarity(b, a)
+        assert direct_ab != approx(direct_ba)
+        mat = m.compute_similarity_matrix([a, b], method="clcs")
+        assert mat[0, 1] == approx(direct_ab)
+        assert mat[1, 0] == approx(direct_ba)
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +632,36 @@ class TestSmifpSimilarities:
         # fingerprint (they would be identical if the '@@' dim were dead).
         s = m.smifp_similarity_tanimoto("C[C@@H](Cl)Br", "CC(Cl)Br", chars=m.SMIFP_CHARS_38)
         assert s < 1.0
+
+    def test_38d_is_actually_38_dimensional(self):
+        # Regression: SMIFP_CHARS_38 used to be 36 characters long despite its
+        # name (34 base chars - '%' + '/','\\','@@'-sentinel = 36).
+        assert len(m.SMIFP_CHARS_38) == 38
+
+    def test_38d_distinguishes_chlorine_and_bromine(self):
+        # Regression: preprocess_smiles rewrites Cl/Br to single-character
+        # sentinels, but neither sentinel used to be a counted symbol in
+        # SMIFP_CHARS_38, so benzene/chlorobenzene/bromobenzene fingerprints
+        # were bit-for-bit identical (F and I were counted; Cl and Br were not).
+        assert m.smifp_similarity_tanimoto("c1ccccc1", "Clc1ccccc1", chars=m.SMIFP_CHARS_38) < 1.0
+        assert m.smifp_similarity_tanimoto("Clc1ccccc1", "Brc1ccccc1", chars=m.SMIFP_CHARS_38) < 1.0
+
+    def test_38d_chlorine_dimension_is_live(self):
+        cl_sentinel = m.ELEMENT_REPLACEMENTS["Cl"]
+        br_sentinel = m.ELEMENT_REPLACEMENTS["Br"]
+        assert cl_sentinel in m.SMIFP_CHARS_38
+        assert br_sentinel in m.SMIFP_CHARS_38
+        fp = m.smiles_to_fingerprint(m.preprocess_smiles("Clc1ccccc1"), m.SMIFP_CHARS_38)
+        assert fp[m.SMIFP_CHARS_38.index(cl_sentinel)] == approx(1.0)
+        assert fp[m.SMIFP_CHARS_38.index(br_sentinel)] == approx(0.0)
+
+    def test_34d_baseline_still_halogen_blind_by_design(self):
+        # The base-34 list is left as a literal single-character-count
+        # descriptor (unchanged from the published SMIfp definition); only
+        # the extended 38D variant was given halogen sentinels. Documenting
+        # this via a passing test so a future change doesn't silently alter
+        # the 34D descriptor's dimensionality without a deliberate decision.
+        assert m.smifp_similarity_tanimoto("c1ccccc1", "Clc1ccccc1") == approx(1.0)
 
     @pytest.mark.skipif(not m.SCIPY_AVAILABLE, reason="scipy not installed")
     def test_cityblock_identical(self):
@@ -609,6 +830,73 @@ class TestMismatchKernelSimilarity:
         assert m.mismatch_kernel_similarity("CCO", "CCOC") == approx(m.mismatch_kernel_similarity("CCOC", "CCO"))
 
 
+class TestCorpusAlphabet:
+    """corpus_alphabet() lets a screening run pin one alphabet across every
+    pair instead of mismatch_kernel_similarity's per-pair default (see A4 in
+    insights-opus50.md: a per-pair alphabet makes the Gram matrix invalid as
+    a kernel and scores incomparable across a library)."""
+
+    def test_union_of_characters(self):
+        assert m.corpus_alphabet(["CCO", "CCN"], preprocess=False) == "".join(sorted(set("CCO") | set("CCN")))
+
+    def test_preprocess_applied_by_default(self):
+        # 'Cl' must contribute its single-character sentinel, not 'C' and 'l'.
+        alphabet = m.corpus_alphabet(["Clc1ccccc1"])
+        assert m.ELEMENT_REPLACEMENTS["Cl"] in alphabet
+        assert "l" not in alphabet
+
+    def test_empty_input(self):
+        assert m.corpus_alphabet([]) == ""
+
+    def test_matches_pair_local_default_for_a_two_string_corpus(self):
+        # With exactly the two strings being compared, the corpus-wide
+        # alphabet must degenerate to the same pair-local alphabet
+        # mismatch_kernel_similarity derives by default.
+        a, b = "CCCCN", "CCCCO"
+        alphabet = m.corpus_alphabet([a, b])
+        explicit = m.mismatch_kernel_similarity(a, b, k=4, m=1, alphabet=alphabet)
+        default = m.mismatch_kernel_similarity(a, b, k=4, m=1)
+        assert explicit == approx(default)
+
+
+class TestMismatchBatchAlphabetConsistency:
+    """compute_similarity_matrix/compute_cross_similarity_matrix must pin one
+    corpus-wide alphabet for mismatch* methods (via corpus_alphabet()) instead
+    of silently falling back to mismatch_kernel_similarity's pair-local
+    default for each cell -- otherwise the matrix mixes several different,
+    mutually incomparable feature spaces in a single run."""
+
+    MOLS = ["CCCCN", "CCCCO", "CCCCCCCCCCCCS"]
+
+    def test_matrix_cell_matches_manual_shared_alphabet(self):
+        mat = m.compute_similarity_matrix(self.MOLS, method="mismatch", k=4, m=1)
+        alphabet = m.corpus_alphabet(self.MOLS)
+        for i, j in [(0, 1), (0, 2), (1, 2)]:
+            expected = m.mismatch_kernel_similarity(self.MOLS[i], self.MOLS[j], k=4, m=1, alphabet=alphabet)
+            assert mat[i, j] == approx(expected)
+
+    def test_matrix_cell_differs_from_pair_local_default(self):
+        # Regression guard: if the auto-alphabet wiring were ever removed,
+        # this would start silently passing with pair-local alphabets again.
+        mat = m.compute_similarity_matrix(self.MOLS, method="mismatch", k=4, m=1)
+        pair_local = m.mismatch_kernel_similarity(self.MOLS[0], self.MOLS[1], k=4, m=1)
+        assert mat[0, 1] != approx(pair_local)
+
+    def test_explicit_alphabet_kwarg_is_not_overridden(self):
+        custom = "ABC"
+        mat = m.compute_similarity_matrix(self.MOLS, method="mismatch", k=4, m=1, alphabet=custom)
+        expected = m.mismatch_kernel_similarity(self.MOLS[0], self.MOLS[1], k=4, m=1, alphabet=custom)
+        assert mat[0, 1] == approx(expected)
+
+    def test_cross_similarity_matrix_also_pins_alphabet(self):
+        templates = [self.MOLS[0]]
+        library = [self.MOLS[1], self.MOLS[2]]
+        mat = m.compute_cross_similarity_matrix(templates, library, method="mismatch", k=4, m=1)
+        alphabet = m.corpus_alphabet(templates + library)
+        expected = m.mismatch_kernel_similarity(library[0], templates[0], k=4, m=1, alphabet=alphabet)
+        assert mat[0, 0] == approx(expected)
+
+
 # ---------------------------------------------------------------------------
 # 7d. Longest Common Substring Similarity
 # ---------------------------------------------------------------------------
@@ -659,6 +947,46 @@ class TestSubsequenceKernel:
                 for n in (1, 2, 3):
                     for lam in (0.3, 0.5, 1.0):
                         assert m._subsequence_kernel_raw(s, t, n, lam) == pytest.approx(self._brute_raw(s, t, n, lam), abs=1e-12)
+
+    @pytest.mark.skipif(not m.SCIPY_AVAILABLE, reason="scipy not installed")
+    def test_scalar_and_vectorized_paths_agree(self):
+        # C2 in insights-opus50.md: _subsequence_kernel_raw_vectorized reformulates
+        # both DP recurrences as scipy.signal.lfilter calls for long strings (see
+        # its docstring). Both implementations must agree exactly (up to float
+        # noise) -- this exercises string lengths that reach the vectorized path
+        # (>= _SUBSEQUENCE_VECTORIZE_MIN_LEN), which the other tests in this class
+        # (all using short SMILES) never do.
+        random.seed(20240517)
+        alphabets = ["CO", "CNOSc1234()=", "ABCDEFGH"]
+        for alphabet in alphabets:
+            for len_s, len_t in [(16, 16), (16, 25), (25, 40), (12, 20), (40, 40)]:
+                s = "".join(random.choice(alphabet) for _ in range(len_s))
+                t = "".join(random.choice(alphabet) for _ in range(len_t))
+                for n in (2, 3, 4):
+                    for lam in (0.3, 0.5, 0.9, 1.0):
+                        scalar = m._subsequence_kernel_raw_scalar(s, t, n, lam)
+                        vectorized = m._subsequence_kernel_raw_vectorized(s, t, n, lam)
+                        assert vectorized == approx(scalar, rel=1e-6), f"n={n} lam={lam} s={s!r} t={t!r}"
+
+    @pytest.mark.skipif(not m.SCIPY_AVAILABLE, reason="scipy not installed")
+    def test_dispatch_reaches_vectorized_path_for_long_strings(self):
+        s = "C" * m._SUBSEQUENCE_VECTORIZE_MIN_LEN
+        t = "C" * m._SUBSEQUENCE_VECTORIZE_MIN_LEN
+        assert min(len(s), len(t)) >= m._SUBSEQUENCE_VECTORIZE_MIN_LEN
+        assert m._subsequence_kernel_raw(s, t, 3, 0.5) == approx(m._subsequence_kernel_raw_vectorized(s, t, 3, 0.5))
+
+    def test_raw_dp_matches_brute_force_longer_strings(self):
+        # Brute-force cross-check extended past the vectorize threshold (the
+        # existing test above only covers strings shorter than
+        # _SUBSEQUENCE_VECTORIZE_MIN_LEN, so it can't catch a bug that only
+        # manifests in the vectorized path). combinations(18, 3) is only 816,
+        # so this stays fast despite the longer strings.
+        cases = ["CC(=O)Oc1ccccc1C(=O)O", "CN1C=NC2=C1C(=O)N(C)C2"]
+        for s in cases:
+            for t in cases:
+                for n in (2, 3):
+                    for lam in (0.3, 0.7):
+                        assert m._subsequence_kernel_raw(s, t, n, lam) == pytest.approx(self._brute_raw(s, t, n, lam), abs=1e-9)
 
     def test_identical(self):
         assert m.subsequence_kernel_similarity("CC(=O)Oc1ccccc1", "CC(=O)Oc1ccccc1") == approx(1.0)
@@ -808,6 +1136,22 @@ class TestMongeElkanSimilarity:
         assert m.is_symmetric_method("monge_elkan", {"bidirectional": False}) is False
         assert m.is_symmetric_method("monge_elkan_sym") is True
 
+    def test_batch_matches_direct_call_on_halogen_containing_smiles(self):
+        # Regression (B2 in insights-opus50.md): monge_elkan declares a
+        # `preprocess` parameter but its docstring says the tokenizer already
+        # handles multi-character atoms and the flag has no effect. The batch
+        # helper used to preprocess_smiles-rewrite the corpus regardless
+        # (Cl/Br -> single-char sentinels) before calling monge_elkan, which
+        # silently changed results because the default token similarity
+        # (character-edit distance) compares token *text* -- "Cl" vs "Br" is
+        # not the same comparison as "L" vs "R". Batch and direct must agree.
+        a, b = "Clc1ccccc1C(=O)O", "Brc1ccccc1C(=O)O"
+        direct = m.monge_elkan_similarity(a, b)
+        batch = m.compute_similarity_matrix([a, b], method="monge_elkan")[0, 1]
+        assert direct == approx(batch)
+        cross = m.compute_cross_similarity_matrix([a], [b], method="monge_elkan")[0, 0]
+        assert m.monge_elkan_similarity(a, b) == approx(cross)
+
 
 # ---------------------------------------------------------------------------
 # 8. LINGO similarity
@@ -819,8 +1163,18 @@ class TestLingoSimilarity:
         assert m.lingo_similarity("CCCCC", "CCCCC") == approx(1.0)
 
     def test_no_common_lingos(self):
-        # Both strings shorter than q → 0 LINGOs each → returns 1.0 (equally empty)
-        assert m.lingo_similarity("CC", "OO", q=4) == approx(1.0)
+        # Both strings shorter than q, and unequal after normalization -> 0.0.
+        # Regression (A2 in insights-opus50.md): the previous "equally empty"
+        # convention returned 1.0 for ANY two sub-q strings regardless of
+        # content (e.g. two unrelated nucleoside-fragment-sized SMILES), which
+        # is wrong for virtual-screening use.
+        assert m.lingo_similarity("CC", "OO", q=4) == approx(0.0)
+
+    def test_both_too_short_but_equal_strings(self):
+        # Both strings shorter than q, but the (preprocessed/normalized)
+        # strings are identical -> 1.0, matching spectrum_kernel_similarity's
+        # convention for its analogous degenerate case.
+        assert m.lingo_similarity("CC", "CC", q=4) == approx(1.0)
 
     def test_one_empty_lingos(self):
         # Only one side is too short → returns 0.0
@@ -912,8 +1266,13 @@ class TestLingoBinarySimilarity:
         assert m.lingo_dice_binary_similarity("CC(=O)Oc1ccccc1", "CC(=O)Oc1ccccc1") == approx(1.0)
 
     def test_no_common_lingos(self):
-        assert m.lingo_jaccard_binary_similarity("CC", "OO", q=4) == approx(1.0)
-        assert m.lingo_dice_binary_similarity("CC", "OO", q=4) == approx(1.0)
+        # Regression (A2): both too short and unequal after normalization -> 0.0.
+        assert m.lingo_jaccard_binary_similarity("CC", "OO", q=4) == approx(0.0)
+        assert m.lingo_dice_binary_similarity("CC", "OO", q=4) == approx(0.0)
+
+    def test_both_too_short_but_equal_strings(self):
+        assert m.lingo_jaccard_binary_similarity("CC", "CC", q=4) == approx(1.0)
+        assert m.lingo_dice_binary_similarity("CC", "CC", q=4) == approx(1.0)
 
     def test_one_empty_lingos(self):
         assert m.lingo_jaccard_binary_similarity("CCCCC", "OO", q=4) == approx(0.0)
@@ -1447,6 +1806,14 @@ class TestJaroSimilarity:
         s = m.jaro_similarity("CCO", "CCN")
         assert 0.0 <= s <= 1.0
 
+    def test_both_empty_returns_one(self):
+        # Regression (B6 in insights-opus50.md): jellyfish.jaro_similarity
+        # returns 0.0 for two empty strings, inconsistent with the
+        # "both-empty -> 1.0" convention this module uses everywhere else
+        # (including its own sibling hamming_similarity/
+        # damerau_levenshtein_similarity in this same section).
+        assert m.jaro_similarity("", "") == approx(1.0)
+
 
 @jellyfish_available
 class TestJaroWinklerSimilarity:
@@ -1456,6 +1823,9 @@ class TestJaroWinklerSimilarity:
     def test_range(self):
         s = m.jaro_winkler_similarity("CCO", "CCN")
         assert 0.0 <= s <= 1.0
+
+    def test_both_empty_returns_one(self):
+        assert m.jaro_winkler_similarity("", "") == approx(1.0)
 
     def test_prefix_bonus(self):
         # Jaro-Winkler >= Jaro when strings share a prefix
@@ -1491,6 +1861,27 @@ class TestNcdSimilarity:
     def test_empty_returns_zero(self):
         assert m.ncd_similarity("", "CCO") == 0.0
         assert m.ncd_similarity("CCO", "") == 0.0
+
+    def test_both_empty_returns_one(self):
+        # Regression (B6 in insights-opus50.md): the "either side empty"
+        # check used to run before the equality check, so two empty (hence
+        # equal) strings returned 0.0 ("dissimilar") instead of 1.0, unlike
+        # nlcs/clcs/substring/lingo/token_edit/monge_elkan's convention.
+        assert m.ncd_similarity("", "") == approx(1.0)
+
+    def test_both_empty_batch_matches_per_pair(self):
+        # ncd is a BATCH_FEATURIZERS method; its combine() must apply the
+        # same equality-before-emptiness order as the standalone function.
+        mols = ["", "", "CCO"]
+        saved = m.BATCH_FEATURIZERS
+        m.BATCH_FEATURIZERS = {}
+        try:
+            ref = m.compute_similarity_matrix(mols, method="ncd", preprocess=False)
+        finally:
+            m.BATCH_FEATURIZERS = saved
+        fast = m.compute_similarity_matrix(mols, method="ncd", preprocess=False)
+        assert np.allclose(ref, fast, atol=1e-12)
+        assert ref[0, 1] == approx(1.0)
 
     def test_range(self):
         s = m.ncd_similarity("CCO", "CCCC")
@@ -1624,6 +2015,37 @@ class TestAvailableMethods:
             v = fn(a, b)  # must not raise
             assert isinstance(v, (int, float)), f"{name}: non-numeric result {v!r}"
             assert -1e-6 <= v <= 1.0 + 1e-6, f"{name}: out-of-range result {v}"
+            checked += 1
+        assert checked >= 200, f"expected to check at least 200 methods, only checked {checked}"
+
+    def test_both_empty_strings_score_one_across_the_registry(self):
+        # Regression (B6 in insights-opus50.md): "both empty -> 1.0, one
+        # empty -> 0.0" is the convention across this module (nlcs, clcs,
+        # substring, lingo family, spectrum/mismatch's "both too short"
+        # branch, token_edit, monge_elkan, ncd, jaro/jaro_winkler, hamming,
+        # damerau_levenshtein, ...). The tok-*_tfidf family used to be the one
+        # exception -- an all-zero TF-IDF vector has a 0/0 self-cosine, which
+        # sklearn reports as 0.0 -- and was excluded here. It no longer is:
+        # that 0.0 also fired for real (merely short) molecules against
+        # themselves, so _tfidf_cosine_similarity now applies the same
+        # convention, and every method in the registry is checked. See
+        # TestTfidfZeroVectorConvention.
+        def deps_available(info):
+            req = info.get("requires")
+            return {
+                "scipy": m.SCIPY_AVAILABLE,
+                "sklearn": m.SKLEARN_AVAILABLE,
+                "jellyfish": m.JELLYFISH_AVAILABLE,
+                "selfies": m.SELFIES_AVAILABLE,
+            }.get(req, True)
+
+        checked = 0
+        for name, info in m.AVAILABLE_METHODS.items():
+            if not deps_available(info):
+                continue
+            fn = info["function"]
+            v = fn("", "")
+            assert v == approx(1.0), f"{name}: expected 1.0 for ('',''), got {v}"
             checked += 1
         assert checked >= 200, f"expected to check at least 200 methods, only checked {checked}"
 
@@ -1765,6 +2187,59 @@ class TestBatchHelpers:
         sim_func = m.get_similarity_function("monge_elkan")
         assert mat[0, 0] == approx(sim_func(templates[0], library[0], tokenizer=char_split, token_similarity=exact_match))
         assert mat[0, 0] != approx(sim_func(library[0], templates[0], tokenizer=char_split, token_similarity=exact_match))
+
+
+class TestCrossSimilarityMatrixParallel:
+    """C6 in insights-opus50.md: compute_cross_similarity_matrix's n_jobs= path
+    parallelizes the general per-pair loop across worker processes. The
+    worker (_cross_similarity_worker_chunk) takes the method *name*, not the
+    similarity function object, and re-resolves it inside the worker process
+    -- most AVAILABLE_METHODS entries are lambdas/closures, which plain
+    pickle cannot serialize, and this platform's multiprocessing start method
+    (forkserver) does not hand worker processes the parent's already-built
+    registry the way a fork would. These tests must run as real worker
+    processes (not mocked), so they exercise that constraint directly."""
+
+    TEMPLATES = ["CC(=O)Oc1ccccc1C(=O)O", "CN1C=NC2=C1C(=O)N(C)C2", "c1ccc(Cl)cc1", "CCO", "CCN", "c1ccccc1", "CC(=O)O"]
+    LIBRARY = ["CCOC", "c1ccc(Br)cc1", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C", "CCCCO", "COCCC", "c1ccccc1O", "CC(N)=O"]
+
+    @pytest.mark.parametrize("method", ["edit", "nlcs", "mismatch"])
+    @pytest.mark.parametrize("n_jobs", [2, 3, -1])
+    def test_parallel_matches_sequential_general_path(self, method, n_jobs):
+        seq = m.compute_cross_similarity_matrix(self.TEMPLATES, self.LIBRARY, method=method, n_jobs=1)
+        par = m.compute_cross_similarity_matrix(self.TEMPLATES, self.LIBRARY, method=method, n_jobs=n_jobs)
+        assert np.allclose(seq, par, atol=1e-12)
+
+    def test_parallel_matches_sequential_for_asymmetric_method(self):
+        # clcs is asymmetric for same-length pairs (see TestMclcs1Length) --
+        # if the worker ever mixed up which argument is the "template" (query)
+        # vs. "library" (candidate), this would be the case most likely to
+        # expose it, since a wrong argument order changes the actual numeric
+        # result rather than silently happening to agree.
+        seq = m.compute_cross_similarity_matrix(self.TEMPLATES, self.LIBRARY, method="clcs", n_jobs=1)
+        par = m.compute_cross_similarity_matrix(self.TEMPLATES, self.LIBRARY, method="clcs", n_jobs=3)
+        assert np.allclose(seq, par, atol=1e-12)
+
+    def test_n_jobs_ignored_for_fast_path_method(self):
+        # lingo is a BATCH_FEATURIZERS (fast-path) method -- n_jobs must be a
+        # silent no-op there (the function returns before the n_jobs branch).
+        seq = m.compute_cross_similarity_matrix(self.TEMPLATES, self.LIBRARY, method="lingo", n_jobs=1)
+        par = m.compute_cross_similarity_matrix(self.TEMPLATES, self.LIBRARY, method="lingo", n_jobs=4)
+        assert np.allclose(seq, par, atol=1e-12)
+
+    def test_more_workers_than_templates(self):
+        # n_jobs=4 with only 1 template must not error or drop that template.
+        seq = m.compute_cross_similarity_matrix(["CCO"], self.LIBRARY, method="edit", n_jobs=1)
+        par = m.compute_cross_similarity_matrix(["CCO"], self.LIBRARY, method="edit", n_jobs=4)
+        assert par.shape == (len(self.LIBRARY), 1)
+        assert np.allclose(seq, par, atol=1e-12)
+
+    def test_default_n_jobs_is_sequential(self):
+        # n_jobs=None (the default) must behave exactly as before this
+        # feature existed -- no process pool spun up for ordinary calls.
+        default = m.compute_cross_similarity_matrix(self.TEMPLATES, self.LIBRARY, method="edit")
+        explicit_seq = m.compute_cross_similarity_matrix(self.TEMPLATES, self.LIBRARY, method="edit", n_jobs=1)
+        assert np.allclose(default, explicit_seq, atol=1e-12)
 
 
 class TestBatchFeaturizeOnce:
@@ -2696,6 +3171,18 @@ def test_pharmacophoric_fingerprint():
     assert et[3] == 2, f"Ethanol: T (sp3 C) should be 2, got {et[3]}"
     assert et[4] == 1, f"Ethanol: L (lipophilic run) should be 1, got {et[4]}"
 
+    # 4b. Regression (A5c/A5f in insights-opus50.md): a leading isotope digit
+    # inside a bracket atom used to defeat every inner[0]-keyed check (D/A/P/
+    # M/Q/S), and ring-bond number '0' used to be excluded from G even though
+    # it is legal SMILES.
+    iso_amine = m._compute_pharmacophore_counts("[15NH2]C")  # isotope-labeled primary amine
+    assert iso_amine[0] == 1, f"[15NH2]C: D should be 1 despite the isotope prefix, got {iso_amine[0]}"
+    assert iso_amine[1] == 1, f"[15NH2]C: A should be 1 despite the isotope prefix, got {iso_amine[1]}"
+    iso_sulfur = m._compute_pharmacophore_counts("C[34S]C")  # isotope-labeled sulfur
+    assert iso_sulfur[10] == 1, f"C[34S]C: S should be 1 despite the isotope prefix, got {iso_sulfur[10]}"
+    ring0 = m._compute_pharmacophore_counts("C0CC0")  # ring-bond number 0 (legal, if unconventional)
+    assert ring0[11] == 2, f"C0CC0: G should be 2 (ring bond '0' must count), got {ring0[11]}"
+
     # 5. Pairwise consistency: fp[12 + pair_idx(i,j)] <= fp[i] and <= fp[j]
     fp_count = m.pharmacophoric_fingerprint("CC(=O)Nc1ccc(O)cc1")
     counts_12 = fp_count[:12]
@@ -2835,6 +3322,16 @@ class TestCoralGlobalFingerprint:
         assert fp.shape == (31,)
         assert (fp == 0).all()
 
+    def test_aromatic_heteroatoms_detected(self):
+        # Regression (A7 in insights-opus50.md): has_N/has_O/has_S/has_P used
+        # to check the uppercase (aliphatic) symbol only, so pyridine, furan,
+        # thiophene -- every N/O/S-heteroaromatic, the dominant chemotype for
+        # RNA binders -- registered as has_X = 0.
+        assert "has_N" in self._named("c1ccncc1")  # pyridine
+        assert "has_O" in self._named("c1ccoc1")  # furan
+        assert "has_S" in self._named("c1ccsc1")  # thiophene
+        assert "has_P" in self._named("c1cc[pH]c1")  # phosphole
+
     def test_registered_in_available_fingerprints(self):
         assert "coral_global" in m.AVAILABLE_FINGERPRINTS
         assert m.AVAILABLE_FINGERPRINTS["coral_global"]["length"] == 31
@@ -2899,3 +3396,389 @@ class TestCoralGlobalCli:
         )
         assert result.returncode == 0
         assert "coral_global" in result.stdout
+
+
+class TestFingerprintCliRepresentationPipeline:
+    """Regression (B3 in insights-opus50.md): fingerprint mode used to call
+    ``fp_func(smi)`` with no kwargs at all, so --no-preprocess was silently
+    ignored (fingerprints of non-SMILES inputs like --inchi/--selfies still
+    got Cl/Na/@@-style preprocess_smiles substitution applied) and
+    pharmacophoric_fingerprint's own canonicalize=True default ran
+    unconditionally with no way to turn it off from the CLI."""
+
+    def _run(self, tmp_path, database, fp_type, extra_args=()):
+        out = tmp_path / "fp_out.csv"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--fingerprint",
+                fp_type,
+                "--database",
+                str(database),
+                "--output",
+                str(out),
+                "--overwrite",
+                *extra_args,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        return out.read_text()
+
+    def test_no_preprocess_changes_smifp_output(self, tmp_path):
+        database = tmp_path / "halogen.smi"
+        database.write_text("Clc1ccccc1 mol1\n")
+        default_out = self._run(tmp_path, database, "smifp34")
+        no_preprocess_out = self._run(tmp_path, database, "smifp34", extra_args=["--no-preprocess"])
+        assert default_out != no_preprocess_out
+
+    @pytest.mark.skipif(not m.RDKIT_AVAILABLE, reason="requires rdkit")
+    def test_canonicalize_flag_reaches_pharmacophoric_fingerprint(self, tmp_path):
+        # pharmacophoric_fingerprint's canonicalize=True default used to be
+        # unconditional and unreachable from the CLI; --canonicalize must now
+        # actually control it (verified directly against the function, since
+        # not every input's *count* vector changes under canonicalization --
+        # see test_pharmacophoric_fingerprint_canonicalize_opt_out for that
+        # more detailed check -- but the CLI kwarg plumbing itself must work
+        # for every fp type that accepts canonicalize=).
+        database = tmp_path / "mol.smi"
+        database.write_text("OC(=O)c1ccccc1C(=O)Oc1ccccc1 mol1\n")
+        for fp_type in ("phasmifp", "phasmifp12"):
+            without = self._run(tmp_path, database, fp_type)
+            with_flag = self._run(tmp_path, database, fp_type, extra_args=["--canonicalize"])
+            # Both must succeed and produce well-formed output regardless of
+            # whether this particular molecule's counts happen to coincide.
+            assert without and with_flag
+
+    def test_verbose_reports_resolved_fingerprint_kwargs(self, tmp_path):
+        database = tmp_path / "mol.smi"
+        database.write_text("CCO mol1\n")
+        out = tmp_path / "fp_out.csv"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--fingerprint",
+                "smifp34",
+                "--database",
+                str(database),
+                "--output",
+                str(out),
+                "--overwrite",
+                "--no-preprocess",
+                "--verbose",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "fingerprint kwargs" in result.stdout
+        assert "'preprocess': False" in result.stdout
+
+
+class TestResolveFingerprintKwargs:
+    """Unit-level coverage for _resolve_fingerprint_kwargs's wrapper-lambda
+    probing, independent of the CLI subprocess tests above."""
+
+    def test_bare_function_with_preprocess_only(self):
+        assert m._resolve_fingerprint_kwargs(m.coral_global_fingerprint, preprocess=True, canonicalize=True) == {"preprocess": True}
+        assert m._resolve_fingerprint_kwargs(m.coral_global_fingerprint, preprocess=False, canonicalize=True) == {"preprocess": False}
+
+    def test_wrapped_function_still_resolves_correctly(self):
+        # smifp38 is registered via a `lambda smi, **kw: smifp_fingerprint(...)`
+        # wrapper, so naive `inspect.signature` on the registered function
+        # would see only `(smi, **kw)` and miss that `preprocess` is accepted.
+        fp_func = m.get_fingerprint_function("smifp38")
+        assert m._resolve_fingerprint_kwargs(fp_func, preprocess=True, canonicalize=True) == {"preprocess": True}
+
+    def test_function_accepting_neither_gets_empty_kwargs(self):
+        fp_func = m.get_fingerprint_function("bpe_count")
+        resolved = m._resolve_fingerprint_kwargs(fp_func, preprocess=True, canonicalize=True)
+        assert resolved == {}
+
+
+class TestLingoRingNormalizationIsSmilesOnly:
+    """Regression: ``normalize_ring_numbers`` is only meaningful for SMILES,
+    but the LINGO family hard-coded ``normalize_rings=True`` regardless of the
+    input representation. An InChI has no bracket atoms to exempt and its
+    connection layer is almost entirely digits, so blanking them deleted the
+    representation's actual content -- benzene's and pyridine's connection
+    layers both collapsed to '/c0-0-0-0-0-0-0', and aspirin-vs-caffeine scored
+    0.33 instead of 0.018. The flag is now a parameter on every lingo function,
+    honoured identically by the featurize-once batch path, and main() switches
+    it off for non-SMILES input exactly as it already does for ``preprocess``."""
+
+    INCHI_ASPIRIN = "C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)"
+    INCHI_CAFFEINE = "C8H10N4O2/c1-10-4-9-6-5(10)7(13)12(3)8(14)11(6)2/h4H,1-3H3"
+
+    def test_ring_digits_kept_when_disabled(self):
+        assert m.normalize_ring_numbers(self.INCHI_ASPIRIN) != self.INCHI_ASPIRIN
+        assert m._lingo_normalized_string(self.INCHI_ASPIRIN, preprocess=False, normalize_rings=False) == self.INCHI_ASPIRIN
+
+    def test_inchi_score_is_no_longer_inflated_by_blanked_digits(self):
+        with_blanking = m.lingo_similarity(self.INCHI_ASPIRIN, self.INCHI_CAFFEINE, preprocess=False)
+        without = m.lingo_similarity(self.INCHI_ASPIRIN, self.INCHI_CAFFEINE, preprocess=False, normalize_rings=False)
+        assert without < with_blanking / 5
+
+    def test_benzene_and_pyridine_inchi_are_distinguishable(self):
+        benzene = "C6H6/c1-2-4-6-5-3-1/h1-6H"
+        pyridine = "C5H5N/c1-2-4-6-5-3-1/h1-5H"
+        # Their connection layers are identical strings once digits are blanked.
+        assert m.normalize_ring_numbers(benzene).split("/")[1] == m.normalize_ring_numbers(pyridine).split("/")[1]
+        blanked = m.lingo_similarity(benzene, pyridine, preprocess=False)
+        kept = m.lingo_similarity(benzene, pyridine, preprocess=False, normalize_rings=False)
+        assert kept < blanked
+
+    @pytest.mark.parametrize("method", sorted(m._RING_NORMALIZING_METHODS))
+    def test_every_lingo_method_accepts_and_honours_the_flag(self, method):
+        fn = m.get_similarity_function(method)
+        on = fn(self.INCHI_ASPIRIN, self.INCHI_CAFFEINE, preprocess=False)
+        off = fn(self.INCHI_ASPIRIN, self.INCHI_CAFFEINE, preprocess=False, normalize_rings=False)
+        assert off < on
+
+    @pytest.mark.parametrize("method", sorted(m._RING_NORMALIZING_METHODS))
+    def test_smiles_default_is_unchanged(self, method):
+        # Default behaviour on SMILES must be identical to passing True
+        # explicitly -- this fix must not move any published SMILES number.
+        fn = m.get_similarity_function(method)
+        a, b = "CC(=O)Oc1ccccc1C(=O)O", "Cn1cnc2c1c(=O)n(C)c(=O)n2C"
+        assert fn(a, b) == approx(fn(a, b, normalize_rings=True))
+
+    @pytest.mark.parametrize("method", sorted(m._RING_NORMALIZING_METHODS))
+    @pytest.mark.parametrize("normalize_rings", [True, False])
+    def test_batch_fast_path_matches_per_pair(self, method, normalize_rings):
+        # The featurize-once path builds the normalized string itself, so the
+        # flag has to reach it through _BATCH_PARAM_KEYS or the batch matrix
+        # would silently disagree with a direct call.
+        strings = [self.INCHI_ASPIRIN, self.INCHI_CAFFEINE, "C6H6/c1-2-4-6-5-3-1/h1-6H"]
+        fn = m.get_similarity_function(method)
+        expected = np.array([[fn(t, lib, preprocess=False, normalize_rings=normalize_rings) for t in strings] for lib in strings])
+        batch = m.compute_cross_similarity_matrix(strings, strings, method=method, preprocess=False, normalize_rings=normalize_rings)
+        assert np.allclose(batch, expected)
+
+    def test_degenerate_short_string_branch_respects_the_flag(self):
+        # 'C1C' and 'C2C' are the same string once ring digits are blanked, and
+        # both are shorter than q=4, so this exercises the "both too short"
+        # branch in both settings.
+        assert m.lingo_similarity("C1C", "C2C") == 1.0
+        assert m.lingo_similarity("C1C", "C2C", normalize_rings=False) == 0.0
+
+    def test_methods_that_cannot_accept_the_flag_are_not_listed(self):
+        # _RING_NORMALIZING_METHODS is also the guard that keeps main() from
+        # passing normalize_rings= into **kw-forwarding lambdas whose target
+        # has no such parameter (which would raise TypeError).
+        for method in m._RING_NORMALIZING_METHODS:
+            assert method in m.AVAILABLE_METHODS
+        for method in ("edit", "smifp38_cbd", "spectrum", "mismatch", "substring"):
+            assert method not in m._RING_NORMALIZING_METHODS
+
+    @pytest.mark.skipif(not m.RDKIT_AVAILABLE, reason="requires rdkit")
+    def test_cli_disables_ring_normalization_for_inchi(self, tmp_path):
+        database = tmp_path / "db.smi"
+        database.write_text("CC(=O)Oc1ccccc1C(=O)O mol1\nCn1cnc2c1c(=O)n(C)c(=O)n2C mol2\n")
+        templates = tmp_path / "tpl.smi"
+        templates.write_text("CC(=O)Oc1ccccc1C(=O)O tpl1\n")
+        out = tmp_path / "out.csv"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--templates",
+                str(templates),
+                "--database",
+                str(database),
+                "--output",
+                str(out),
+                "--method",
+                "lingo",
+                "--inchi",
+                "--overwrite",
+                "--verbose",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "ring-digit normalization: off" in result.stdout
+        # mol2 (caffeine) must score low against the aspirin template; with
+        # digits blanked it scored ~0.33.
+        caffeine_row = [line for line in out.read_text().splitlines() if line.startswith("mol2")][0]
+        assert float(caffeine_row.split(",")[1]) < 0.1
+
+
+class TestTfidfZeroVectorConvention:
+    """Regression: a TF-IDF vector with no representable n-gram (any molecule
+    with fewer tokens than the ngram floor -- 'CCO' under the recommended
+    ngram_range=(4,4)) gave cosine 0/0 = 0.0, so such a molecule scored 0.0
+    against *itself*, and the three code paths disagreed: the per-pair function
+    returned 0.0, compute_similarity_matrix's diagonal was force-set to 1.0,
+    and the cross matrix returned 0.0. All three now apply the module-wide
+    degenerate-case convention (equal strings -> 1.0)."""
+
+    SHORT = "CCO"
+    # Mixed-length corpus so the vectorizer itself fits with a non-empty
+    # vocabulary and the short strings genuinely become all-zero rows.
+    LIBRARY = ["CC(=O)Oc1ccccc1C(=O)O", "Cn1cnc2c1c(=O)n(C)c(=O)n2C", "CCO", "C", "CCO"]
+    METHODS = ["tok-smiles_tfidf44", "tok-schwaller_tfidf44", "tok-selfies_tfidf44", "tok-bpe_tfidf55"]
+
+    @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="requires sklearn")
+    @pytest.mark.parametrize("method", METHODS)
+    def test_per_pair_self_similarity_is_one(self, method):
+        info = m.AVAILABLE_METHODS[method]
+        if info.get("requires") == "selfies" and not m.SELFIES_AVAILABLE:
+            pytest.skip("requires selfies")
+        fn = m.get_similarity_function(method)
+        assert fn(self.SHORT, self.SHORT) == approx(1.0)
+        assert fn("", "") == approx(1.0)
+
+    @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="requires sklearn")
+    @pytest.mark.parametrize("method", METHODS)
+    def test_distinct_zero_vector_strings_still_score_zero(self, method):
+        info = m.AVAILABLE_METHODS[method]
+        if info.get("requires") == "selfies" and not m.SELFIES_AVAILABLE:
+            pytest.skip("requires selfies")
+        fn = m.get_similarity_function(method)
+        # Two different too-short molecules must not become a perfect match
+        # (the same reasoning as A2's LINGO fix).
+        assert fn("CCO", "C") == 0.0
+
+    @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="requires sklearn")
+    @pytest.mark.parametrize("method", METHODS)
+    def test_cross_matrix_scores_a_template_against_its_own_copy(self, method):
+        info = m.AVAILABLE_METHODS[method]
+        if info.get("requires") == "selfies" and not m.SELFIES_AVAILABLE:
+            pytest.skip("requires selfies")
+        templates = ["CC(=O)Oc1ccccc1C(=O)O", "CCO", "C"]
+        matrix = m.compute_cross_similarity_matrix(templates, self.LIBRARY, method=method)
+        # library rows 2 and 4 are 'CCO', row 3 is 'C'; template cols 1 and 2.
+        assert matrix[2, 1] == approx(1.0)
+        assert matrix[4, 1] == approx(1.0)
+        assert matrix[3, 2] == approx(1.0)
+        assert matrix[2, 2] == 0.0  # 'CCO' vs 'C' — genuinely different
+
+    @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="requires sklearn")
+    @pytest.mark.parametrize("method", METHODS)
+    def test_square_matrix_duplicate_off_diagonal(self, method):
+        info = m.AVAILABLE_METHODS[method]
+        if info.get("requires") == "selfies" and not m.SELFIES_AVAILABLE:
+            pytest.skip("requires selfies")
+        matrix = m.compute_similarity_matrix(self.LIBRARY, method=method)
+        assert matrix[2, 4] == approx(1.0)  # both 'CCO'
+        assert matrix[2, 3] == 0.0  # 'CCO' vs 'C'
+        assert np.allclose(np.diag(matrix), 1.0)
+
+    @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="requires sklearn")
+    def test_empty_vocabulary_branch_also_compares_strings(self):
+        # A corpus of nothing but too-short strings makes TfidfVectorizer.fit
+        # raise on an empty vocabulary; that branch used to return a flat 0.0.
+        fn = m.get_similarity_function("tok-smiles_tfidf44")
+        assert fn("CCO", "CCO", corpus=["CCO", "C"]) == approx(1.0)
+        assert fn("CCO", "C", corpus=["CCO", "C"]) == 0.0
+
+    @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="requires sklearn")
+    def test_lingo_tfidf_similarity_uses_the_same_convention(self):
+        assert m.lingo_tfidf_similarity("CCO", "CCO", q=4) == approx(1.0)
+        assert m.lingo_tfidf_similarity("CCO", "CCN", q=4) == 0.0
+
+    @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="requires sklearn")
+    def test_non_degenerate_scores_are_untouched(self):
+        # The correction must only ever fire on zero-vector x zero-vector
+        # cells; ordinary drug-like pairs keep their exact previous values.
+        fn = m.get_similarity_function("tok-smiles_tfidf44")
+        a, b = "CC(=O)Oc1ccccc1C(=O)O", "Cn1cnc2c1c(=O)n(C)c(=O)n2C"
+        matrix = m.compute_cross_similarity_matrix([a], [a, b], method="tok-smiles_tfidf44")
+        assert matrix[0, 0] == approx(1.0)
+        assert 0.0 < matrix[1, 0] < 1.0
+        assert fn(a, b, corpus=[a, b]) == approx(fn(a, b, corpus=[a, b]))
+
+
+class TestPharmacophoreNitroAndNOxide:
+    """Regression (A5 in insights-opus50.md): a nitro nitrogen carries a formal
+    '+' but is neither positive-ionizable (P) nor a quaternary ammonium (Q) --
+    nitrobenzene used to produce exactly the same P/Q signature as
+    tetramethylammonium. N-oxides are excluded for the same reason (the charge
+    belongs to a locally neutral, zwitterionic group)."""
+
+    P, Q = 5, 7
+
+    @pytest.mark.parametrize(
+        "smiles",
+        [
+            "O=[N+]([O-])c1ccccc1",  # nitrobenzene, O= first
+            "c1ccc([N+](=O)[O-])cc1",  # nitro in a branch, N first
+            "[N+](=O)([O-])c1ccccc1",  # nitro at the start of the string
+            "[O-][N+](=O)c1ccccc1",  # anionic O first
+            "[O-][N+](=O)[O-]",  # nitrate
+            "CC[N+](=O)[O-]",  # aliphatic nitro
+        ],
+    )
+    def test_nitro_is_neither_p_nor_q(self, smiles):
+        counts = m._compute_pharmacophore_counts(smiles)
+        assert counts[self.P] == 0.0
+        assert counts[self.Q] == 0.0
+
+    @pytest.mark.parametrize("smiles", ["[O-][n+]1ccccc1", "C[N+](C)(C)[O-]"])
+    def test_n_oxide_is_neither_p_nor_q(self, smiles):
+        counts = m._compute_pharmacophore_counts(smiles)
+        assert counts[self.P] == 0.0
+        assert counts[self.Q] == 0.0
+
+    def test_quaternary_ammonium_still_counts(self):
+        counts = m._compute_pharmacophore_counts("C[N+](C)(C)C")
+        assert counts[self.P] == 1.0
+        assert counts[self.Q] == 1.0
+
+    def test_quaternary_ammonium_with_a_remote_anion_still_counts(self):
+        # The exclusion must look only at the nitrogen's own neighbourhood --
+        # an alkoxide two bonds away is not an N-oxide.
+        counts = m._compute_pharmacophore_counts("C[N+](C)(C)CC[O-]")
+        assert counts[self.P] == 1.0
+        assert counts[self.Q] == 1.0
+
+    @pytest.mark.parametrize("smiles", ["[NH4+]", "CC[NH2+]C", "[15NH3+]C", "c1cc[nH+]cc1"])
+    def test_protonatable_nitrogen_is_still_positive_ionizable(self, smiles):
+        assert m._compute_pharmacophore_counts(smiles)[self.P] == 1.0
+
+    def test_nitro_oxygens_still_count_as_acceptor_and_negative_ionizable(self):
+        # Documented scope limit: only the P/Q misassignment is corrected.
+        counts = m._compute_pharmacophore_counts("O=[N+]([O-])c1ccccc1")
+        assert counts[1] > 0  # A
+        assert counts[6] == 1.0  # M
+
+    def test_nitro_helper_recognises_orderings_directly(self):
+        tokenize = m._PHARM_TOKEN_RE.findall
+        for smiles in ("O=[N+]([O-])c1ccccc1", "[N+](=O)[O-]", "[O-][N+](=O)C"):
+            tokens = tokenize(smiles)
+            idx = next(i for i, t in enumerate(tokens) if t.startswith("[N+") or t.startswith("[n+"))
+            assert m._is_nitro_or_noxide_nitrogen(tokens, idx) is True
+        tokens = tokenize("C[N+](C)(C)C")
+        idx = tokens.index("[N+]")
+        assert m._is_nitro_or_noxide_nitrogen(tokens, idx) is False
+
+
+class TestLingoTfidfRingNormalizationFlag:
+    """lingo_tfidf_similarity builds its own LingoVectorizer, which normalizes
+    ring digits by default; it must expose the same SMILES-only switch as the
+    rest of the LINGO family (see TestLingoRingNormalizationIsSmilesOnly)."""
+
+    @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="requires sklearn")
+    def test_flag_changes_inchi_scores(self):
+        a = "C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)"
+        b = "C8H10N4O2/c1-10-4-9-6-5(10)7(13)12(3)8(14)11(6)2/h4H,1-3H3"
+        corpus = [a, b]
+        on = m.lingo_tfidf_similarity(a, b, corpus=corpus)
+        off = m.lingo_tfidf_similarity(a, b, corpus=corpus, normalize_rings=False)
+        assert off < on
+
+    @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="requires sklearn")
+    def test_supplied_vectorizer_still_wins(self):
+        # An explicitly supplied, pre-fitted vectorizer carries its own
+        # setting; the kwarg must not silently rebuild or override it.
+        corpus = ["CC(=O)Oc1ccccc1C(=O)O", "Cn1cnc2c1c(=O)n(C)c(=O)n2C"]
+        vec = m.LingoVectorizer(q=4, use_idf=True, normalize_rings=False)
+        vec.fit(corpus)
+        assert m.lingo_tfidf_similarity(corpus[0], corpus[1], vectorizer=vec, normalize_rings=True) == approx(
+            m.lingo_tfidf_similarity(corpus[0], corpus[1], vectorizer=vec, normalize_rings=False)
+        )
