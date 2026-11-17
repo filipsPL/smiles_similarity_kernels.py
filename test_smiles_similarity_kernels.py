@@ -328,6 +328,29 @@ class TestSmilesToInchi:
         assert m.smiles_to_inchi("") == ""
 
 
+@rdkit_available
+class TestSmilesToMurckoScaffold:
+    def test_aspirin_scaffold_is_benzene(self):
+        assert m.smiles_to_murcko_scaffold("CC(=O)Oc1ccccc1C(=O)O") == "c1ccccc1"
+
+    def test_acyclic_scaffold_is_empty_string(self):
+        # No ring system -> no scaffold; this is the correct chemical answer,
+        # not a parse failure, so it must not fall back to the input string.
+        assert m.smiles_to_murcko_scaffold("CCCC") == ""
+
+    def test_invalid_smiles_fallback(self):
+        assert m.smiles_to_murcko_scaffold("INVALID!!!") == "INVALID!!!"
+
+    def test_empty_fallback(self):
+        assert m.smiles_to_murcko_scaffold("") == ""
+
+    def test_different_substituents_share_a_scaffold(self):
+        # Scaffold-hopping case: same ring system, different exocyclic groups.
+        toluene_scaffold = m.smiles_to_murcko_scaffold("Cc1ccccc1")
+        chlorobenzene_scaffold = m.smiles_to_murcko_scaffold("Clc1ccccc1")
+        assert toluene_scaffold == chlorobenzene_scaffold == "c1ccccc1"
+
+
 # preprocess_inchi / extract_inchi_layers are pure string logic (no RDKit call),
 # so they run unconditionally -- unlike smiles_to_inchi_layers below, which
 # needs RDKit to produce the InChI in the first place.
@@ -1942,6 +1965,10 @@ class TestAvailableMethods:
         "lingo_ruzicka",
         "lingo_jaccard_binary",
         "lingo_dice_binary",
+        "lingo_tfidf",
+        "lingo_tfidf3",
+        "lingo_tfidf5",
+        "spaced_lingo",
         "spectrum",
         "spectrum3",
         "spectrum5",
@@ -2265,6 +2292,7 @@ class TestBatchFeaturizeOnce:
         "lingo_ruzicka",
         "lingo_jaccard_binary",
         "lingo_dice_binary",
+        "spaced_lingo",
         "spectrum",
         "spectrum3",
         "spectrum5",
@@ -2323,6 +2351,54 @@ class TestBatchFeaturizeOnce:
         assert np.allclose(ref, fast, atol=1e-12)
 
 
+class TestCrossSimilarityChunking:
+    """compute_cross_similarity_matrix's featurize-once fast path processes
+    the library in CROSS_SIMILARITY_CHUNK_SIZE-sized chunks rather than
+    featurizing it all at once, to bound peak memory (see the constant's
+    docstring -- `substring` on a large library of long InChI strings reached
+    ~312GB RSS before this fix). Chunking must be purely a memory-timing
+    change: the same combine() calls in the same order, bit-for-bit identical
+    output regardless of chunk size."""
+
+    TEMPLATES = ["CCO", "c1ccc(Cl)cc1", "C[C@@H](N)C(=O)O", "CC(=O)Nc1ccccc1"]
+    # Deliberately not a multiple of the small chunk sizes exercised below,
+    # to cover a partial final chunk.
+    LIBRARY = [
+        "CC(=O)Oc1ccccc1C(=O)O",
+        "c1ccc(Cl)cc1",
+        "c1ccc(Br)cc1",
+        "C[C@@H](Cl)Br",
+        "CCO",
+        "CC",
+        "O",
+        "c1ccccc1",
+        "ClC(Cl)(Cl)Cl",
+        "CCCCCCCCCC",
+        "c1ccc2ccccc2c1",
+    ] * 5  # 55 molecules
+
+    METHODS = ["substring", "lingo", "spectrum", "smifp_tanimoto", "ncd", "subsequence"]
+
+    @pytest.mark.parametrize("method", METHODS)
+    @pytest.mark.parametrize("chunk_size", [1, 3, 7, 1_000_000])
+    def test_chunking_is_output_invariant(self, method, chunk_size):
+        saved = m.CROSS_SIMILARITY_CHUNK_SIZE
+        try:
+            m.CROSS_SIMILARITY_CHUNK_SIZE = 1_000_000  # effectively unchunked
+            reference = m.compute_cross_similarity_matrix(self.TEMPLATES, self.LIBRARY, method=method)
+            m.CROSS_SIMILARITY_CHUNK_SIZE = chunk_size
+            chunked = m.compute_cross_similarity_matrix(self.TEMPLATES, self.LIBRARY, method=method)
+        finally:
+            m.CROSS_SIMILARITY_CHUNK_SIZE = saved
+        assert np.array_equal(reference, chunked), f"{method} chunk_size={chunk_size} diverged from unchunked reference"
+
+    def test_default_chunk_size_is_reasonable(self):
+        # Sanity guard against someone "optimizing" this back down to 1 (defeats
+        # the point of featurize-once for small libraries) or up to something
+        # so large it stops bounding memory at all.
+        assert 1_000 <= m.CROSS_SIMILARITY_CHUNK_SIZE <= 1_000_000
+
+
 @pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="sklearn not installed")
 class TestTfidfBatchFitting:
     """The batch path must fit exactly one vectorizer on the whole corpus, using
@@ -2349,6 +2425,9 @@ class TestTfidfBatchFitting:
         assert m._tfidf_family("tok-schwaller_tfidf") == "schwaller"
         assert m._tfidf_family("tok-bpe512_tfidf12") == "bpe"
         assert m._tfidf_family("tok-selfies_tfidf33") == "selfies"
+        assert m._tfidf_family("lingo_tfidf") == "lingo"
+        assert m._tfidf_family("lingo_tfidf3") == "lingo"
+        assert m._tfidf_family("lingo_tfidf5") == "lingo"
         assert m._tfidf_family("lingo") is None
         assert m._tfidf_family("edit") is None
 
@@ -2404,6 +2483,8 @@ class TestTfidfMatrixBatchedFastPath:
         "tok-smiles_tfidf12",
         "tok-schwaller_tfidf44",
         "tok-selfies_tfidf12",
+        "lingo_tfidf",
+        "lingo_tfidf3",
     ]
 
     def _per_pair_cross_reference(self, templates, library, method, preprocess):
@@ -2679,6 +2760,54 @@ class TestCliValidation:
                 str(out),
                 "--method",
                 "edit",
+                "--inchi",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert out.exists()
+
+    @rdkit_available
+    def test_cli_murcko_scaffold(self, tmp_path):
+        out = tmp_path / "results.csv"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--templates",
+                str(TEMPLATES_SMI),
+                "--database",
+                str(DATABASE_SMI),
+                "--output",
+                str(out),
+                "--method",
+                "edit",
+                "--murcko-scaffold",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert out.exists()
+
+    @rdkit_available
+    def test_cli_murcko_scaffold_composes_with_inchi(self, tmp_path):
+        # --murcko-scaffold must run before --inchi, not conflict with it.
+        out = tmp_path / "results.csv"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--templates",
+                str(TEMPLATES_SMI),
+                "--database",
+                str(DATABASE_SMI),
+                "--output",
+                str(out),
+                "--method",
+                "edit",
+                "--murcko-scaffold",
                 "--inchi",
             ],
             capture_output=True,
@@ -3560,7 +3689,24 @@ class TestLingoRingNormalizationIsSmilesOnly:
         # would silently disagree with a direct call.
         strings = [self.INCHI_ASPIRIN, self.INCHI_CAFFEINE, "C6H6/c1-2-4-6-5-3-1/h1-6H"]
         fn = m.get_similarity_function(method)
-        expected = np.array([[fn(t, lib, preprocess=False, normalize_rings=normalize_rings) for t in strings] for lib in strings])
+        if m._tfidf_family(method) is not None:
+            if not m.SKLEARN_AVAILABLE:
+                pytest.skip("sklearn not installed")
+            # TF-IDF methods are corpus-dependent (IDF weights), so a plain
+            # fn(t, lib, ...) call (implicit 2-string corpus) is not a valid
+            # per-pair reference for a batch fit on the corpus
+            # compute_cross_similarity_matrix actually uses (templates +
+            # library, i.e. strings + strings here, duplicates included --
+            # they shift sklearn's smoothed IDF slightly vs a deduplicated
+            # corpus). Reuse _build_batch_kwargs itself so the reference is
+            # built identically to the real batch path, exactly like
+            # TestTfidfMatrixBatchedFastPath's _per_pair_cross_reference.
+            filtered_kwargs, _ = m._build_batch_kwargs(
+                fn, method, strings + strings, {"preprocess": False, "normalize_rings": normalize_rings}
+            )
+            expected = np.array([[fn(t, lib, **filtered_kwargs) for t in strings] for lib in strings])
+        else:
+            expected = np.array([[fn(t, lib, preprocess=False, normalize_rings=normalize_rings) for t in strings] for lib in strings])
         batch = m.compute_cross_similarity_matrix(strings, strings, method=method, preprocess=False, normalize_rings=normalize_rings)
         assert np.allclose(batch, expected)
 
@@ -3788,3 +3934,225 @@ class TestLingoTfidfRingNormalizationFlag:
         assert m.lingo_tfidf_similarity(corpus[0], corpus[1], vectorizer=vec, normalize_rings=True) == approx(
             m.lingo_tfidf_similarity(corpus[0], corpus[1], vectorizer=vec, normalize_rings=False)
         )
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the 2026-09 review (CLAUDE-Opus55.md, bugs 1-5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="requires sklearn")
+class TestLingoTfidfCaseSensitive:
+    """Bug 1: LingoVectorizer used sklearn's default lowercase=True, merging
+    aromatic/aliphatic atoms (c/C, n/N, o/O) and the Cl/Br sentinels."""
+
+    def test_benzene_vs_cyclohexane(self):
+        # No shared q-gram once case is respected (c0cccc0 vs C0CCCC0).
+        assert m.lingo_tfidf_similarity("c1ccccc1", "C1CCCCC1") == 0.0
+
+    def test_pyridine_vs_piperidine(self):
+        assert m.lingo_tfidf_similarity("c1ccncc1", "C1CCNCC1") == 0.0
+
+    def test_vocabulary_keeps_case(self):
+        vec = m.LingoVectorizer(q=4)
+        vec.fit(["c1ccccc1", "C1CCCCC1"])
+        vocab = set(vec.vectorizer.vocabulary_)
+        assert "cccc" in vocab and "CCCC" in vocab
+
+    def test_count_vectorizer_keeps_case(self):
+        vec = m.LingoVectorizer(q=4, use_idf=False)
+        vec.fit(["c1ccccc1", "C1CCCCC1"])
+        assert "CCCC" in vec.vectorizer.vocabulary_
+
+    @pytest.mark.parametrize("method", ["lingo_tfidf", "lingo_tfidf3", "lingo_tfidf5"])
+    def test_batch_matrix(self, method):
+        sim = m.compute_cross_similarity_matrix(["c1ccccc1"], ["C1CCCCC1", "c1ccccc1"], method=method)
+        assert sim[0, 0] == 0.0
+        assert sim[1, 0] == approx(1.0)
+
+
+@pytest.mark.skipif(not m.SKLEARN_AVAILABLE, reason="requires sklearn")
+class TestLingoTfidfBatchPreprocess:
+    """Bug 2: lingo_tfidf3/5 are **kw lambdas, so _build_batch_kwargs did not
+    preprocess their corpus, and the batch LingoVectorizer was hard-wired to
+    preprocess=False -- Cl/Br were split across q-grams in batch/CLI mode only.
+
+    The reference is the *standalone* function with the same explicit corpus,
+    not a _build_batch_kwargs-derived one (TestTfidfMatrixBatchedFastPath's
+    reference shares _build_batch_kwargs and so could not catch this)."""
+
+    TEMPLATES = ["Clc1ccc(Br)cc1CCO", "CC(=O)Oc1ccccc1C(=O)O"]
+    LIBRARY = ["Clc1ccccc1CCN", "Brc1ccc(Cl)cc1", "CCCCCCBr", "c1ccncc1CCCl"]
+
+    @pytest.mark.parametrize("method,q", [("lingo_tfidf", 4), ("lingo_tfidf3", 3), ("lingo_tfidf5", 5)])
+    @pytest.mark.parametrize("preprocess", [True, False])
+    def test_batch_matches_standalone(self, method, q, preprocess):
+        corpus = self.TEMPLATES + self.LIBRARY
+        batch = m.compute_cross_similarity_matrix(self.TEMPLATES, self.LIBRARY, method=method, preprocess=preprocess)
+        for i, lib in enumerate(self.LIBRARY):
+            for j, tmpl in enumerate(self.TEMPLATES):
+                ref = m.lingo_tfidf_similarity(tmpl, lib, q=q, corpus=corpus, preprocess=preprocess)
+                assert batch[i, j] == pytest.approx(ref, abs=1e-12), (method, tmpl, lib)
+
+    @pytest.mark.parametrize("method", ["lingo_tfidf", "lingo_tfidf3", "lingo_tfidf5"])
+    def test_batch_vocabulary_has_no_split_halogens(self, method):
+        sim_func = m.get_similarity_function(method)
+        filtered, _ = m._build_batch_kwargs(sim_func, method, ["ClCCCCCl", "BrCCCCBr"], {"preprocess": True})
+        vocab = filtered["vectorizer"].vectorizer.vocabulary_
+        assert not any("l" in tok or "r" in tok for tok in vocab), sorted(vocab)
+
+
+class TestNcdRawDeflate:
+    """Bug 3: gzip's ~18-byte container overhead dominated SMILES-length inputs
+    and inflated NCD similarity of unrelated molecules (0.68-0.83)."""
+
+    def test_no_container_overhead(self):
+        import gzip
+
+        data = b"CC(=O)Nc1ccc(O)cc1"
+        assert m._compress_bytes(data) <= len(gzip.compress(data, mtime=0)) - 18
+        assert m._compress_bytes(b"") <= 2
+
+    def test_deterministic(self):
+        assert m._compress_bytes(b"c1ccccc1O") == m._compress_bytes(b"c1ccccc1O")
+
+    def test_unrelated_short_molecules_score_low(self):
+        assert m.ncd_similarity("CCO", "c1ccncc1") < 0.3
+        assert m.ncd_similarity("CCCCCCCC", "OOOOOOOO") < 0.4
+
+    def test_related_molecules_score_higher_than_unrelated(self):
+        related = m.ncd_similarity("CC(=O)Nc1ccc(O)cc1", "CC(=O)Nc1ccc(OC)cc1")
+        unrelated = m.ncd_similarity("CC(=O)Nc1ccc(O)cc1", "CCCCCCCCBr")
+        assert related > 0.5 > unrelated
+
+    def test_batch_matches_per_pair(self):
+        mols = ["CCO", "c1ccncc1", "CC(=O)Nc1ccc(O)cc1", "CC(=O)Nc1ccc(OC)cc1"]
+        batch = m.compute_similarity_matrix(mols, method="ncd")
+        for i in range(len(mols)):
+            for j in range(len(mols)):
+                if i != j:
+                    assert batch[i, j] == pytest.approx(m.ncd_similarity(mols[i], mols[j]), abs=1e-12)
+
+
+class TestConversionNoSmilesFallback:
+    """Bug 4: the CLI used ``convert(s) or s``, silently comparing raw SMILES
+    against InChI/SELFIES strings whenever a layer was legitimately empty or
+    conversion failed."""
+
+    def test_convert_representation_marks_failures_empty(self, capsys):
+        out = m._convert_representation(["a", "b", "c"], ["n1", "n2", "n3"], lambda s: None if s == "b" else s.upper(), "TEST")
+        assert out == ["A", "", "C"]
+        err = capsys.readouterr().err
+        assert "1 of 3" in err and "n2" in err
+
+    def test_convert_representation_keeps_legit_empty_silent(self, capsys):
+        out = m._convert_representation(["a"], ["n1"], lambda s: "", "TEST")
+        assert out == [""]
+        assert capsys.readouterr().err == ""
+
+    @pytest.mark.skipif(not m.RDKIT_AVAILABLE, reason="requires rdkit")
+    def test_inchi_absent_layer_is_empty_not_failure(self):
+        assert m._inchi_layers_or_none("ClC(Cl)(Cl)Cl", ["hydrogens"]) == ""
+        assert m._inchi_layers_or_none("[Na+]", ["connections"]) == ""
+        assert m._inchi_layers_or_none("", "all") == ""  # e.g. acyclic Murcko scaffold
+
+    @pytest.mark.skipif(not m.RDKIT_AVAILABLE, reason="requires rdkit")
+    def test_inchi_failure_is_none(self):
+        assert m._inchi_layers_or_none("C1CC", "all") is None  # unclosed ring
+
+    @pytest.mark.skipif(not m.SELFIES_AVAILABLE, reason="requires selfies")
+    def test_selfies_helper(self):
+        assert m._selfies_or_none("") == ""
+        assert m._selfies_or_none("CCO") == "[C][C][O]"
+
+    @pytest.mark.skipif(not m.RDKIT_AVAILABLE, reason="requires rdkit")
+    def test_cli_fingerprint_empty_layer_not_smiles(self, tmp_path):
+        # CCl4 has no InChI hydrogen layer. With the old fallback its raw
+        # SMILES "ClC(Cl)(Cl)Cl" was fingerprinted instead (non-zero C and
+        # parenthesis counts); now it is the empty string -> all-zero SMIfp.
+        db = tmp_path / "db.smi"
+        db.write_text("ClC(Cl)(Cl)Cl ccl4\nCCO ethanol\nC1CC broken\n")
+        out = tmp_path / "fp.csv"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--fingerprint",
+                "smifp34",
+                "--database",
+                str(db),
+                "--output",
+                str(out),
+                "--inchi",
+                "--inchi-layer",
+                "hydrogens",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        rows = {line.split(",")[0]: line.split(",")[1:] for line in out.read_text().splitlines()[1:]}
+        assert all(v == "0" for v in rows["ccl4"])
+        assert all(v == "0" for v in rows["broken"])
+        assert any(v != "0" for v in rows["ethanol"])
+        assert "broken" in result.stderr and "ccl4" not in result.stderr
+
+    @pytest.mark.skipif(not m.RDKIT_AVAILABLE, reason="requires rdkit")
+    def test_cli_similarity_reports_failures(self, tmp_path):
+        tmpl = tmp_path / "t.smi"
+        tmpl.write_text("CCO ethanol\n")
+        db = tmp_path / "db.smi"
+        db.write_text("CCO ethanol\nC1CC broken\n")
+        out = tmp_path / "out.csv"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parent / "smiles_similarity_kernels.py"),
+                "--templates",
+                str(tmpl),
+                "--database",
+                str(db),
+                "--output",
+                str(out),
+                "--method",
+                "edit",
+                "--inchi",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "InChI (database) conversion failed for 1 of 2" in result.stderr
+        assert "broken" in result.stderr
+        rows = dict(line.split(",") for line in out.read_text().splitlines()[1:])
+        assert float(rows["broken"]) == 0.0
+
+
+class TestCoralStereoHandedness:
+    """Bug 5: bond_stereo fired for '@' but not for '@@' (preprocessed to a
+    sentinel), so enantiomers got different CORAL fingerprints."""
+
+    STEREO = 2  # index of bond_stereo
+
+    def test_enantiomers_identical(self):
+        r = m.coral_global_fingerprint("C[C@H](N)O")
+        s = m.coral_global_fingerprint("C[C@@H](N)O")
+        assert r[self.STEREO] == s[self.STEREO] == 1.0
+        assert (r == s).all()
+
+    def test_named_stereo_forms(self):
+        assert m.coral_global_fingerprint("C[C@TH1H](N)O")[self.STEREO] == 1.0
+        assert m.coral_global_fingerprint("F[Po@SP1](Cl)(Br)I")[self.STEREO] == 1.0
+
+    def test_no_stereo(self):
+        assert m.coral_global_fingerprint("CC(N)O")[self.STEREO] == 0.0
+
+    def test_without_preprocess(self):
+        assert m.coral_global_fingerprint("C[C@@H](N)O", preprocess=False)[self.STEREO] == 1.0
+
+    def test_stereo_sentinels_do_not_collide_with_other_bits(self):
+        # The sentinels are unique to stereo tokens; no other fingerprint bit
+        # may change between the two enantiomers of a richer molecule.
+        a = m.coral_global_fingerprint("Cl[C@H](F)C(=O)N")
+        b = m.coral_global_fingerprint("Cl[C@@H](F)C(=O)N")
+        assert (a == b).all()
