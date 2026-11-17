@@ -136,6 +136,7 @@ except ImportError:
 # Optional import for RDKit (SMILES canonicalization and InChI conversion)
 try:
     from rdkit import Chem
+    from rdkit.Chem.Scaffolds import MurckoScaffold
 
     try:
         from rdkit.Chem.inchi import MolToInchi  # RDKit >= 2020
@@ -456,6 +457,49 @@ def canonicalize_smiles(smiles: str) -> str:
         if mol is None:
             return smiles
         return Chem.MolToSmiles(mol)
+    except Exception:
+        return smiles
+
+
+def smiles_to_murcko_scaffold(smiles: str) -> str:
+    """
+    Return the Bemis-Murcko scaffold SMILES for a molecule using RDKit.
+
+    The scaffold keeps ring systems and the linkers connecting them,
+    stripping every exocyclic substituent (side chains) -- running the
+    existing method battery on scaffolds instead of whole molecules turns
+    it into a scaffold-similarity/scaffold-hopping comparison. Falls back
+    to the original string when RDKit is unavailable or the SMILES cannot
+    be parsed.
+
+    A fully acyclic input (e.g. "CCCC") has no ring system, so RDKit's
+    scaffold extraction legitimately returns an empty molecule -- this
+    function returns ``""`` for that case rather than falling back to the
+    original string, since "no scaffold" is itself the correct, chemically
+    meaningful answer (every acyclic molecule collapses to the same empty
+    scaffold, which is the whole point of the comparison), not a failure.
+
+    Parameters
+    ----------
+    smiles : str
+        Input SMILES string
+
+    Returns
+    -------
+    str
+        Canonical scaffold SMILES, ``""`` for an acyclic input, or the
+        original string if RDKit parsing itself fails
+    """
+    if not smiles or not RDKIT_AVAILABLE:
+        return smiles
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return smiles
+        scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+        if scaffold is None:
+            return smiles
+        return Chem.MolToSmiles(scaffold)
     except Exception:
         return smiles
 
@@ -1394,7 +1438,13 @@ def _lingo_normalized_string(smiles: str, preprocess: bool, normalize_rings: boo
     return smiles
 
 
-def get_lingos(smiles: str, q: int = 4, normalize_rings: bool = True, preprocess: bool = True) -> Counter:
+def get_lingos(
+    smiles: str,
+    q: int = 4,
+    normalize_rings: bool = True,
+    preprocess: bool = True,
+    pattern: Optional[str] = None,
+) -> Counter:
     """
     Extract LINGOs (q-character substrings) from SMILES.
 
@@ -1403,7 +1453,8 @@ def get_lingos(smiles: str, q: int = 4, normalize_rings: bool = True, preprocess
     smiles : str
         SMILES string
     q : int
-        LINGO length (default 4)
+        LINGO length (default 4).  Ignored when ``pattern`` is given — the
+        window length is then ``len(pattern)``.
     normalize_rings : bool
         Whether to normalize ring-closure digits to '0'.  **SMILES-only** —
         pass False for InChI, SELFIES or any other non-SMILES input: outside
@@ -1415,6 +1466,14 @@ def get_lingos(smiles: str, q: int = 4, normalize_rings: bool = True, preprocess
         to switch this off automatically under ``--inchi``/``--selfies``.
     preprocess : bool
         Whether to preprocess multi-char elements
+    pattern : str, optional
+        A spaced/gapped q-gram seed pattern of ``'1'`` (keep) / ``'0'``
+        (gap) characters, e.g. ``"1101"``.  When given, each window of
+        length ``len(pattern)`` contributes a token built from only the
+        ``'1'`` positions (gap characters are dropped, not kept as a
+        placeholder), so the token is shorter than the window — this is
+        the "gapped k-mer" construction (cf. gkm-SVM), not a classical
+        wildcard-masked spaced seed.  See :func:`spaced_lingo_similarity`.
 
     Returns
     -------
@@ -1429,6 +1488,13 @@ def get_lingos(smiles: str, q: int = 4, normalize_rings: bool = True, preprocess
 
     lingos = Counter()
     n = len(smiles)
+
+    if pattern is not None:
+        span = len(pattern)
+        keep = [k for k, c in enumerate(pattern) if c == "1"]
+        for i in range(n - span + 1):
+            lingos["".join(smiles[i + k] for k in keep)] += 1
+        return lingos
 
     for i in range(n - q + 1):
         lingo = smiles[i : i + q]
@@ -1762,6 +1828,89 @@ def lingo_dice_binary_similarity(smiles1: str, smiles2: str, q: int = 4, preproc
     """
     jaccard = lingo_jaccard_binary_similarity(smiles1, smiles2, q=q, preprocess=preprocess, normalize_rings=normalize_rings)
     return 2.0 * jaccard / (1.0 + jaccard)
+
+
+DEFAULT_SPACED_LINGO_PATTERN = "1101"
+
+
+def spaced_lingo_similarity(
+    smiles1: str,
+    smiles2: str,
+    pattern: str = DEFAULT_SPACED_LINGO_PATTERN,
+    preprocess: bool = True,
+    normalize_rings: bool = True,
+) -> float:
+    """
+    Spaced (gapped) q-gram LINGOsim.
+
+    Mirrors :func:`lingo_similarity`'s averaged per-token agreement ratio
+    exactly, but tokens are sampled through a spaced seed *pattern* (a
+    string of ``'1'``/``'0'`` characters, e.g. ``"1101"`` = keep offsets
+    0, 1, 3 and drop offset 2) instead of a contiguous q-character
+    substring — see :func:`get_lingos`'s ``pattern`` parameter for the
+    exact token construction (gap positions are dropped, not kept as a
+    wildcard placeholder).
+
+    Spaced/gapped k-mers are established in the sequence-comparison
+    literature (PatternHunter spaced seeds, Ma, Tromp & Li 2002; gkm-SVM,
+    Ghandi et al. 2014) to be more sensitive than contiguous k-mers of the
+    same weight: a single mismatching character can fall on a "don't care"
+    position without breaking every token spanning it. The SMILES analogue
+    is a chain-length or ring-size difference of exactly one atom, which
+    shifts every downstream contiguous LINGO q-gram but leaves a spaced
+    token unaffected whenever the difference lands on a gap position —
+    this is a genuinely distinct signal from the other registered LINGO
+    coefficients (Tversky/Dice/Ruzicka/binary), not a monotone transform
+    of any of them, since it changes which tokens are extracted in the
+    first place rather than how token counts are combined.
+
+    Parameters
+    ----------
+    smiles1, smiles2 : str
+        SMILES strings to compare.
+    pattern : str
+        Seed pattern of ``'1'``/``'0'`` characters; must start and end
+        with ``'1'`` (a seed with a leading/trailing gap is equivalent to
+        a shorter pattern with an offset window, so it is rejected as
+        ambiguous rather than silently accepted). Default ``"1101"``
+        (span 4, weight 3, one gap).
+    preprocess : bool
+        Whether to preprocess SMILES.
+    normalize_rings : bool
+        Whether to blank ring-closure digits (default True). SMILES-only —
+        pass False for InChI/SELFIES input; see :func:`get_lingos`.
+
+    Returns
+    -------
+    float
+        Similarity score in [0, 1].
+    """
+    if len(pattern) < 2 or any(c not in "01" for c in pattern) or pattern[0] != "1" or pattern[-1] != "1":
+        raise ValueError(f"pattern must be a '0'/'1' string of length >= 2 starting and ending with '1', got {pattern!r}")
+
+    lingos1 = get_lingos(smiles1, normalize_rings=normalize_rings, preprocess=preprocess, pattern=pattern)
+    lingos2 = get_lingos(smiles2, normalize_rings=normalize_rings, preprocess=preprocess, pattern=pattern)
+
+    all_lingos = set(lingos1.keys()) | set(lingos2.keys())
+
+    if len(all_lingos) == 0:
+        # Both strings shorter than the pattern span; see lingo_similarity's
+        # matching branch for why this compares the normalized strings
+        # rather than returning an unconditional constant.
+        return (
+            1.0
+            if _lingo_normalized_string(smiles1, preprocess, normalize_rings) == _lingo_normalized_string(smiles2, preprocess, normalize_rings)
+            else 0.0
+        )
+
+    similarity_sum = 0.0
+    for lg in all_lingos:
+        n1 = lingos1.get(lg, 0)
+        n2 = lingos2.get(lg, 0)
+        if n1 + n2 > 0:
+            similarity_sum += 1.0 - abs(n1 - n2) / (n1 + n2)
+
+    return similarity_sum / len(all_lingos)
 
 
 # ============================================================================
@@ -2418,14 +2567,19 @@ class LingoVectorizer:
         # Convert SMILES to LINGO strings
         lingo_strings = [self._smiles_to_lingo_string(s) for s in smiles_list]
 
+        # lowercase=False is load-bearing: sklearn lowercases by default, which
+        # in SMILES merges aromatic and aliphatic atoms (c/C, n/N, o/O, s/S) and
+        # the preprocess sentinels (e.g. 'L' for Cl vs 'l'). With the default,
+        # benzene vs cyclohexane scored 1.0. See TestLingoTfidfCaseSensitive.
         if self.use_idf:
             self.vectorizer = TfidfVectorizer(
                 analyzer="word",
+                lowercase=False,
                 token_pattern=r"[^\s]+",  # Any non-whitespace sequence
                 sublinear_tf=True,  # Use 1 + log(tf) as in the paper
             )
         else:
-            self.vectorizer = CountVectorizer(analyzer="word", token_pattern=r"[^\s]+")
+            self.vectorizer = CountVectorizer(analyzer="word", lowercase=False, token_pattern=r"[^\s]+")
 
         self.vectorizer.fit(lingo_strings)
         self.is_fitted = True
@@ -2463,6 +2617,7 @@ def lingo_tfidf_similarity(
     corpus: List[str] = None,
     vectorizer: LingoVectorizer = None,
     normalize_rings: bool = True,
+    preprocess: bool = True,
 ) -> float:
     """
     LINGO-based TF-IDF cosine similarity.
@@ -2479,12 +2634,21 @@ def lingo_tfidf_similarity(
         Corpus for IDF calculation (required for meaningful IDF)
     vectorizer : LingoVectorizer
         Pre-fitted vectorizer (optional, for efficiency).  When supplied, its
-        own ``normalize_rings`` setting applies and the argument below is
-        ignored.
+        own ``normalize_rings``/``preprocess`` settings apply and the two
+        arguments below are ignored.
     normalize_rings : bool
         Whether the vectorizer built here should blank ring-closure digits
         (default True).  SMILES-only — pass False for InChI/SELFIES input,
         for the reason given in :func:`get_lingos`.
+    preprocess : bool
+        Whether the vectorizer built here should apply SMILES character
+        preprocessing (default True).  Pass False for InChI/SELFIES input —
+        see :func:`preprocess_smiles`. Unlike ``smiles_tfidf_similarity`` and
+        the other tokenizer-backed TF-IDF methods, this flag is *not*
+        ignorable here: ``LingoVectorizer`` chunks raw characters into
+        q-grams rather than routing through a chemically-aware tokenizer, so
+        multi-character atoms (``Cl``, ``Br``, ...) must be collapsed first
+        or they get split across q-gram boundaries.
 
     Returns
     -------
@@ -2501,7 +2665,7 @@ def lingo_tfidf_similarity(
         if corpus is None:
             corpus = [smiles1, smiles2]
 
-        vectorizer = LingoVectorizer(q=q, use_idf=True, normalize_rings=normalize_rings)
+        vectorizer = LingoVectorizer(q=q, use_idf=True, normalize_rings=normalize_rings, preprocess=preprocess)
         try:
             vectorizer.fit(corpus)
         except ValueError:
@@ -3398,22 +3562,33 @@ def hamming_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> f
 
 
 def _compress_bytes(data: bytes, compresslevel: int = 9) -> int:
-    """Return compressed size of *data* using gzip with mtime=0 (deterministic)."""
-    import gzip as _gzip
-    import io as _io
+    """
+    Return the compressed size of *data* as a raw DEFLATE stream (no container).
 
-    buf = _io.BytesIO()
-    with _gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=compresslevel, mtime=0) as f:
-        f.write(data)
-    return len(buf.getvalue())
+    Raw DEFLATE (``wbits=-15``) is used rather than a gzip file: gzip adds a
+    fixed ~18-byte header/trailer, which for SMILES-length inputs (tens of
+    bytes) is as large as the payload itself. That constant is added to C(x),
+    C(y) and C(xy) alike, inflating the NCD denominator and compressing the
+    score range upward -- unrelated short molecules scored 0.68-0.83 (e.g.
+    "CCO" vs pyridine 0.68, raw DEFLATE 0.10). See TestNcdRawDeflate.
+    Deterministic: no timestamp or filename is stored.
+    """
+    import zlib as _zlib
+
+    compressor = _zlib.compressobj(compresslevel, _zlib.DEFLATED, -15)
+    return len(compressor.compress(data) + compressor.flush())
 
 
 def ncd_similarity(smiles1: str, smiles2: str, preprocess: bool = True) -> float:
     """
-    Normalized Compression Distance (NCD) similarity using gzip.
+    Normalized Compression Distance (NCD) similarity using DEFLATE.
 
     NCD(x,y) = (C(x|y) - min(C(x), C(y))) / max(C(x), C(y))
     similarity = 1 - NCD, clamped to [0, 1].
+
+    C(.) is the raw DEFLATE stream length (zlib, no gzip container) -- the
+    gzip header/trailer would otherwise dominate SMILES-length inputs; see
+    :func:`_compress_bytes`.
 
     Both concatenation orders (x|y and y|x) are tried; the minimum
     compressed size is used for robustness.  A '|' separator (not valid
@@ -3992,13 +4167,13 @@ def pharmacophoric_fingerprint(
 # weighting is out of scope for this module.
 #
 # Halogen tokens are given in their *preprocessed* single-character form
-# (see ELEMENT_REPLACEMENTS): Cl -> 'L', Br -> 'R'.  The '@' bond-stereo bit
-# only fires for a lone '@' surviving preprocessing (the anticlockwise
-# marker); '@@' and the named stereo forms (@TH1, @OH, ...) are rewritten to
-# their own sentinel characters by preprocess_smiles and are therefore not
-# matched by this bit -- the same documented limitation as the '@' slot in
-# SMIFP_CHARS_34.
+# (see ELEMENT_REPLACEMENTS): Cl -> 'L', Br -> 'R'.  The bond-stereo bit is a
+# presence bit for *any* chirality marker, so it must also match the
+# sentinels preprocess_smiles substitutes for '@@' and the named stereo forms
+# (@TH1, @OH, ...). Matching only a lone '@' made the bit depend on
+# handedness: C[C@H](N)O set it and its enantiomer C[C@@H](N)O did not.
 CORAL_BOND_CHARS = ["=", "#", "@"]  # double bond, triple bond, stereo marker
+CORAL_STEREO_CHARS = ["@"] + [v for k, v in ELEMENT_REPLACEMENTS.items() if k.startswith("@")]
 CORAL_NOSP_ELEMENTS = ["N", "O", "S", "P"]  # heteroatoms
 CORAL_HALO_ELEMENTS = ["F", ELEMENT_REPLACEMENTS["Cl"], ELEMENT_REPLACEMENTS["Br"]]  # F, Cl, Br
 CORAL_ATOMPAIR_ELEMENTS = CORAL_HALO_ELEMENTS + CORAL_NOSP_ELEMENTS  # F, Cl, Br, N, O, S, P (halo then nosp order)
@@ -4052,7 +4227,8 @@ def coral_global_fingerprint(smiles: str, preprocess: bool = True) -> np.ndarray
     if preprocess:
         smiles = preprocess_smiles(smiles)
 
-    bond_bits = [1.0 if ch in smiles else 0.0 for ch in CORAL_BOND_CHARS]
+    bond_bits = [1.0 if ch in smiles else 0.0 for ch in CORAL_BOND_CHARS[:2]]
+    bond_bits.append(1.0 if any(ch in smiles for ch in CORAL_STEREO_CHARS) else 0.0)
     # Check both the uppercase (aliphatic) and lowercase (aromatic) SMILES
     # symbol for each heteroatom -- pyridine's ring nitrogen is written "n",
     # never "N", so checking uppercase only makes this bit blind to aromatic
@@ -4334,6 +4510,29 @@ AVAILABLE_METHODS = {
         "description": "Binary Sørensen-Dice on LINGO q-gram presence/absence (q=4) — monotonic transform of lingo_jaccard_binary",
         "params": {"q": 4},
     },
+    "lingo_tfidf": {
+        "function": lingo_tfidf_similarity,
+        "description": "LINGO-based TF-IDF cosine similarity (q=4)",
+        "params": {"q": 4},
+        "requires": "sklearn",
+    },
+    "lingo_tfidf3": {
+        "function": lambda s1, s2, **kw: lingo_tfidf_similarity(s1, s2, **{**{"q": 3}, **kw}),
+        "description": "LINGO-based TF-IDF cosine similarity (q=3)",
+        "params": {"q": 3},
+        "requires": "sklearn",
+    },
+    "lingo_tfidf5": {
+        "function": lambda s1, s2, **kw: lingo_tfidf_similarity(s1, s2, **{**{"q": 5}, **kw}),
+        "description": "LINGO-based TF-IDF cosine similarity (q=5)",
+        "params": {"q": 5},
+        "requires": "sklearn",
+    },
+    "spaced_lingo": {
+        "function": spaced_lingo_similarity,
+        "description": "Spaced (gapped) q-gram LINGOsim, pattern='1101' (span 4, weight 3, one gap) — distinct signal from contiguous LINGO q-grams",
+        "params": {"pattern": DEFAULT_SPACED_LINGO_PATTERN},
+    },
     "spectrum": {
         "function": lambda s1, s2, **kw: spectrum_kernel_similarity(s1, s2, **{**{"k": 4, "coefficient": "tanimoto"}, **kw}),
         "description": "Spectrum kernel (k=4, Tanimoto) — classical fixed-k string kernel",
@@ -4487,7 +4686,7 @@ AVAILABLE_METHODS = {
     },
     "ncd": {
         "function": ncd_similarity,
-        "description": "Normalized Compression Distance similarity (gzip, universal/parameter-free)",
+        "description": "Normalized Compression Distance similarity (raw DEFLATE, universal/parameter-free)",
         "params": {},
     },
     **{
@@ -4609,6 +4808,10 @@ _RING_NORMALIZING_METHODS = {
     "lingo_ruzicka",
     "lingo_jaccard_binary",
     "lingo_dice_binary",
+    "lingo_tfidf",
+    "lingo_tfidf3",
+    "lingo_tfidf5",
+    "spaced_lingo",
 }
 
 
@@ -4674,10 +4877,19 @@ def get_similarity_function(method: str) -> Callable:
 # ``"<family>" in method`` substring tests.
 _TFIDF_FAMILY_RE = re.compile(r"tok-([a-z]+?)\d*_tfidf")
 
+# lingo_tfidf/lingo_tfidf3/lingo_tfidf5 deliberately keep the rest of the
+# LINGO family's bare (no ``tok-`` prefix) naming convention rather than
+# being renamed to fit _TFIDF_FAMILY_RE -- LingoVectorizer chunks raw
+# characters, it isn't a tokenizer object like the tok-* families, so the
+# "tok-" prefix would be misleading.  Recognised as its own case instead.
+_LINGO_TFIDF_RE = re.compile(r"^lingo_tfidf\d*$")
+
 
 def _tfidf_family(method: str) -> Optional[str]:
-    """Return the tokenizer family ('smiles'/'schwaller'/'bpe'/'selfies') of a
-    TF-IDF method name, or ``None`` if *method* is not a TF-IDF method."""
+    """Return the tokenizer family ('smiles'/'schwaller'/'bpe'/'selfies'/'lingo')
+    of a TF-IDF method name, or ``None`` if *method* is not a TF-IDF method."""
+    if _LINGO_TFIDF_RE.match(method):
+        return "lingo"
     match = _TFIDF_FAMILY_RE.match(method)
     return match.group(1) if match else None
 
@@ -4686,13 +4898,26 @@ def _make_batch_tfidf_vectorizer(family: str, params: dict):
     """
     Build a single **unfitted** vectorizer for a TF-IDF method family.
 
-    ``params`` supplies ``ngram_range`` / ``num_merges`` / ``q`` — these are baked
-    into each method's registry entry (and its function lambda), so they must be
-    read from the registry ``params``, not from the batch ``kwargs`` (which only
-    carry ``preprocess``).  Returns ``None`` for an unknown family.
+    ``params`` supplies ``ngram_range`` / ``num_merges`` / ``q`` / ``normalize_rings``
+    — these are baked into each method's registry entry (and its function lambda), so
+    they must be read from the registry ``params``, not from the batch ``kwargs``
+    (which only carry ``preprocess``).  Returns ``None`` for an unknown family.
     """
     if family == "lingo":
-        return LingoVectorizer(q=params.get("q", 4), use_idf=True)
+        # ``params["preprocess"]`` is set by _build_batch_kwargs: False when it
+        # has already preprocessed the corpus itself (or the caller passed
+        # preprocess=False), True when it could not -- registry entries that
+        # are ``**kw`` lambdas (lingo_tfidf3/5) hide the ``preprocess``
+        # parameter from its signature check, so the corpus reaches this
+        # vectorizer raw. Hardcoding False here made those two methods split
+        # Cl/Br across q-grams in batch/CLI mode only. The tok-* families
+        # ignore the flag (their tokenizers handle multi-char atoms).
+        return LingoVectorizer(
+            q=params.get("q", 4),
+            use_idf=True,
+            normalize_rings=params.get("normalize_rings", True),
+            preprocess=params.get("preprocess", False),
+        )
     _tokenizer_factories = {
         "smiles": SMILESTokenizer,
         "schwaller": SMILESTokenizerSchwaller,
@@ -4756,9 +4981,11 @@ def _build_batch_kwargs(sim_func, method: str, corpus: List[str], kwargs: dict) 
     # _PREPROCESS_IGNORING_METHODS) -- rewriting the corpus for them changes
     # nothing they use correctly and, for monge_elkan, silently changes the
     # result because its secondary similarity compares token text directly.
+    corpus_preprocessed = False
     if filtered.get("preprocess", True) and "preprocess" in params and method not in _PREPROCESS_IGNORING_METHODS:
         corpus = [preprocess_smiles(s) for s in corpus]
         filtered = {**filtered, "preprocess": False}
+        corpus_preprocessed = True
 
     # For TF-IDF methods, fit ONE vectorizer on the full corpus so IDF weights
     # reflect the whole dataset rather than each individual pair.  The vectorizer
@@ -4767,9 +4994,15 @@ def _build_batch_kwargs(sim_func, method: str, corpus: List[str], kwargs: dict) 
     family = _tfidf_family(method)
     if family is not None and "vectorizer" not in filtered and SKLEARN_AVAILABLE:
         registry_params = dict(AVAILABLE_METHODS.get(method, {}).get("params", {}))
-        for key in ("ngram_range", "num_merges", "q"):
+        for key in ("ngram_range", "num_merges", "q", "normalize_rings"):
             if key in kwargs:  # explicit user override wins over the registry default
                 registry_params[key] = kwargs[key]
+        # Only LingoVectorizer acts on this. If the corpus was not rewritten
+        # above -- which is the case for **kw-forwarding registry lambdas such
+        # as lingo_tfidf3/lingo_tfidf5, whose signature has no named
+        # ``preprocess`` -- the vectorizer must preprocess itself, or Cl/Br
+        # are split across q-grams in batch mode only.
+        registry_params["preprocess"] = kwargs.get("preprocess", True) and not corpus_preprocessed
         try:
             vec = _make_batch_tfidf_vectorizer(family, registry_params)
             if vec is not None:
@@ -4867,6 +5100,20 @@ def _make_lingo_batch(params: dict) -> Tuple[Callable, Callable]:
     def featurize(s: str) -> Tuple[str, Counter]:
         norm = normalize(s)
         return norm, get_lingos(norm, q=q, normalize_rings=False, preprocess=False)
+
+    return featurize, _combine_lingo_sim
+
+
+def _make_spaced_lingo_batch(params: dict) -> Tuple[Callable, Callable]:
+    """Mirrors :func:`_make_lingo_batch`, but samples tokens through a spaced
+    seed pattern (see :func:`spaced_lingo_similarity`) instead of a
+    contiguous q-gram window."""
+    pattern = params.get("pattern", DEFAULT_SPACED_LINGO_PATTERN)
+    normalize = _lingo_batch_normalizer(params)
+
+    def featurize(s: str) -> Tuple[str, Counter]:
+        norm = normalize(s)
+        return norm, get_lingos(norm, normalize_rings=False, preprocess=False, pattern=pattern)
 
     return featurize, _combine_lingo_sim
 
@@ -5088,6 +5335,7 @@ BATCH_FEATURIZERS: Dict[str, Callable[[dict], Tuple[Callable, Callable]]] = {
     "lingo_dice": lambda p: _make_tversky_batch(p, alpha=0.5, beta=0.5),
     "lingo_ruzicka": lambda p: _make_tversky_batch(p, alpha=1.0, beta=1.0),
     "lingo_jaccard_binary": lambda p: _make_lingo_binary_batch(p, metric="jaccard"),
+    "spaced_lingo": _make_spaced_lingo_batch,
     "lingo_dice_binary": lambda p: _make_lingo_binary_batch(p, metric="dice"),
     "spectrum": _make_spectrum_batch,
     "spectrum3": _make_spectrum_batch,
@@ -5108,7 +5356,7 @@ BATCH_FEATURIZERS: Dict[str, Callable[[dict], Tuple[Callable, Callable]]] = {
 }
 
 # User kwargs that legitimately override a method's feature parameters.
-_BATCH_PARAM_KEYS = ("q", "k", "coefficient", "alpha", "beta", "min_length", "n", "lam", "normalize_rings")
+_BATCH_PARAM_KEYS = ("q", "k", "coefficient", "alpha", "beta", "min_length", "n", "lam", "normalize_rings", "pattern")
 
 
 def _apply_tfidf_zero_vector_convention(
@@ -5256,6 +5504,22 @@ def compute_similarity_matrix(smiles_list: List[str], method: str = "lingo", sym
     return sim_matrix
 
 
+# Bounds peak memory for compute_cross_similarity_matrix's featurize-once fast
+# path. Featurizing the WHOLE library up front (all N_lib entries held
+# simultaneously in a Python list) is what let `substring`'s O(length^2)
+# per-string substring enumeration reach ~312GB RSS on a 348,742-molecule
+# library of ~124-character InChI strings (2026-09 benchmark review). Chunking
+# bounds the "extra" memory held at any moment to roughly this many molecules'
+# featurized representations, independent of library size, by letting each
+# chunk's feature objects become eligible for garbage collection before the
+# next chunk is featurized. It computes the exact same combine() calls in the
+# exact same (i, j) order as the unchunked version, so it changes nothing
+# about the output -- only when intermediate objects are freed. Templates are
+# still featurized once, up front, for the whole call (they are the small
+# side of templates x library, so holding all of them is never the problem).
+CROSS_SIMILARITY_CHUNK_SIZE = 20_000
+
+
 def _cross_similarity_worker_chunk(method: str, filtered_kwargs: dict, templates_chunk: List[str], library: List[str]) -> np.ndarray:
     """
     Picklable, module-level worker for :func:`compute_cross_similarity_matrix`'s
@@ -5337,14 +5601,18 @@ def compute_cross_similarity_matrix(templates: List[str], library: List[str], me
         featurize, combine = batch
         prep = preprocess_smiles if kwargs.get("preprocess", True) else (lambda x: x)
         tfeats = [featurize(prep(t)) for t in templates]
-        lfeats = [featurize(prep(lib)) for lib in library]
-        for i in range(n_lib):
-            lf = lfeats[i]
-            for j in range(n_templates):
-                # Argument order matches sim_func(template, lib): for asymmetric
-                # methods (query-weighted Tversky) the template is the query, per
-                # lingo_tversky_similarity's own docstring and the paper it cites.
-                sim_matrix[i, j] = combine(tfeats[j], lf)
+        # Library is featurized in chunks, not all at once -- see
+        # CROSS_SIMILARITY_CHUNK_SIZE's docstring for why.
+        for start in range(0, n_lib, CROSS_SIMILARITY_CHUNK_SIZE):
+            end = min(start + CROSS_SIMILARITY_CHUNK_SIZE, n_lib)
+            lfeats_chunk = [featurize(prep(lib)) for lib in library[start:end]]
+            for offset, lf in enumerate(lfeats_chunk):
+                i = start + offset
+                for j in range(n_templates):
+                    # Argument order matches sim_func(template, lib): for asymmetric
+                    # methods (query-weighted Tversky) the template is the query, per
+                    # lingo_tversky_similarity's own docstring and the paper it cites.
+                    sim_matrix[i, j] = combine(tfeats[j], lf)
         return sim_matrix
 
     # General path: per-pair evaluation, corpus preprocessed once up front.
@@ -5761,6 +6029,7 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
                    smifp38_cbd, smifp38_tanimoto, lingo, lingo3, lingo5,
                    lingo_tversky, lingo_tversky_sym, lingo_dice, lingo_ruzicka,
                    lingo_jaccard_binary, lingo_dice_binary,
+                   lingo_tfidf, lingo_tfidf3, lingo_tfidf5, spaced_lingo,
                    spectrum, spectrum3, spectrum5, spectrum_cosine,
                    spectrum_tversky, spectrum_tversky_sym, spectrum_overlap,
                    mismatch, mismatch3, mismatch5, lcs_substring, token_edit,
@@ -5853,6 +6122,14 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
         "--selfies",
         action="store_true",
         help="Convert SMILES → SELFIES (requires selfies). " "All string-similarity methods apply directly to SELFIES bracket tokens.",
+    )
+
+    convert_group.add_argument(
+        "--murcko-scaffold",
+        action="store_true",
+        help="Replace each molecule with its Bemis-Murcko scaffold SMILES (requires rdkit) before any other "
+        "conversion, so it composes with --inchi/--selfies (scaffold, then convert). Ring systems and linkers "
+        "only; exocyclic substituents removed. A fully acyclic molecule scaffolds to the empty string.",
     )
 
     convert_group.add_argument(
@@ -5955,6 +6232,60 @@ Available methods: edit, nlcs, clcs, substring, smifp_cbd, smifp_tanimoto,
     parser.add_argument("--demo", action="store_true", help="Run a demonstration with example molecules and exit")
 
     return parser, parser.parse_args()
+
+
+def _inchi_layers_or_none(smiles: str, layers: Union[str, List[str]]) -> Optional[str]:
+    """
+    SMILES -> selected InChI layer(s), distinguishing failure from emptiness.
+
+    Returns ``None`` only when InChI generation itself fails for a non-empty
+    input. A successfully generated InChI whose requested layer is simply
+    absent returns ``""`` -- that is the correct representation, not a
+    failure: CCl4 has no hydrogen layer, a single-atom ion such as [Na+] has
+    no connection layer, and an acyclic Murcko scaffold is already ``""``.
+    """
+    if not smiles:
+        return ""
+    inchi = smiles_to_inchi(smiles)
+    if not inchi:
+        return None
+    return extract_inchi_layers(inchi, layers)
+
+
+def _selfies_or_none(smiles: str) -> Optional[str]:
+    """SMILES -> SELFIES; ``None`` on failure for a non-empty input, ``""`` for ``""``."""
+    if not smiles:
+        return ""
+    return smiles_to_selfies(smiles) or None
+
+
+def _convert_representation(strings: List[str], names: List[str], convert: Callable[[str], Optional[str]], label: str) -> List[str]:
+    """
+    Apply a representation conversion to every string, reporting failures.
+
+    ``convert`` returns ``None`` on failure. A failed molecule becomes ``""``
+    and is listed on stderr -- it is **not** replaced by its original SMILES.
+    The previous ``convert(s) or s`` fallback silently injected raw SMILES text
+    into an InChI/SELFIES comparison, both for real failures and for
+    legitimately empty InChI layers (CCl4's hydrogen layer, [Na+]'s connection
+    layer), so those molecules were scored as SMILES-vs-InChI string pairs.
+    """
+    out: List[str] = []
+    failed: List[str] = []
+    for name, s in zip(names, strings):
+        converted = convert(s)
+        if converted is None:
+            failed.append(name)
+            converted = ""
+        out.append(converted)
+    if failed:
+        shown = ", ".join(failed[:10]) + (f", ... (+{len(failed) - 10} more)" if len(failed) > 10 else "")
+        print(
+            f"Warning: {label} conversion failed for {len(failed)} of {len(strings)} molecule(s); "
+            f"they are represented as the empty string: {shown}",
+            file=sys.stderr,
+        )
+    return out
 
 
 def _parse_col_arg(col_arg: Optional[str]) -> Optional[Union[int, str]]:
@@ -6070,19 +6401,24 @@ def main():
 
         # Apply the same convert / normalize / augment pipeline as similarity mode.
         string_type = "smiles"
+        if args.murcko_scaffold:
+            if not RDKIT_AVAILABLE:
+                print("Error: --murcko-scaffold requires rdkit.", file=sys.stderr)
+                sys.exit(1)
+            lib_smiles = [smiles_to_murcko_scaffold(s) for s in lib_smiles]
         if args.inchi:
             if not RDKIT_AVAILABLE:
                 print("Error: --inchi requires rdkit.", file=sys.stderr)
                 sys.exit(1)
             layers_arg = [s.strip() for s in args.inchi_layer.split(",") if s.strip()]
             layers_for_convert = "all" if layers_arg == ["all"] else layers_arg
-            lib_smiles = [smiles_to_inchi_layers(s, layers_for_convert) or s for s in lib_smiles]
+            lib_smiles = _convert_representation(lib_smiles, lib_names, lambda s: _inchi_layers_or_none(s, layers_for_convert), "InChI")
             string_type = "inchi"
         elif args.selfies:
             if not SELFIES_AVAILABLE:
                 print("Error: --selfies requires selfies.", file=sys.stderr)
                 sys.exit(1)
-            lib_smiles = [smiles_to_selfies(s) or s for s in lib_smiles]
+            lib_smiles = _convert_representation(lib_smiles, lib_names, _selfies_or_none, "SELFIES")
             string_type = "selfies"
 
         if args.canonicalize:
@@ -6091,6 +6427,23 @@ def main():
                     print("Error: --canonicalize requires rdkit.", file=sys.stderr)
                     sys.exit(1)
                 lib_smiles = [canonicalize_smiles(s) for s in lib_smiles]
+
+        # Mirror similarity mode's representation pipeline: preprocess is
+        # SMILES-only and off for --inchi/--selfies; canonicalize is only
+        # ever applied when the user actually asked for it (previously a
+        # fingerprint function like pharmacophoric_fingerprint always
+        # canonicalized internally by its own default, unreachable from
+        # here -- --no-preprocess and not passing --canonicalize were both
+        # silently ignored in fingerprint mode).
+        fp_preprocess = string_type == "smiles" and not args.no_preprocess
+
+        # ELEMENT_REPLACEMENTS must run before shuffle/sort, same reasoning as
+        # similarity mode: preprocess_smiles() only merges a multi-char atom
+        # (Cl, Br, @@, ...) when its letters are still adjacent, which
+        # shuffling/sorting first would break (idempotent, so safe either way).
+        if (args.shuffle or args.sort) and fp_preprocess:
+            lib_smiles = [preprocess_smiles(s) for s in lib_smiles]
+            fp_preprocess = False
 
         if args.shuffle:
             lib_smiles = [shuffle_smiles(s, seed=args.shuffle_seed) for s in lib_smiles]
@@ -6106,14 +6459,6 @@ def main():
 
         try:
             fp_func = get_fingerprint_function(args.fingerprint)
-            # Mirror similarity mode's representation pipeline: preprocess is
-            # SMILES-only and off for --inchi/--selfies; canonicalize is only
-            # ever applied when the user actually asked for it (previously a
-            # fingerprint function like pharmacophoric_fingerprint always
-            # canonicalized internally by its own default, unreachable from
-            # here -- --no-preprocess and not passing --canonicalize were both
-            # silently ignored in fingerprint mode).
-            fp_preprocess = string_type == "smiles" and not args.no_preprocess
             fp_canonicalize = bool(args.canonicalize) and string_type == "smiles"
             fp_kwargs = _resolve_fingerprint_kwargs(fp_func, fp_preprocess, fp_canonicalize)
             if args.verbose:
@@ -6194,6 +6539,18 @@ def main():
     # Input is always SMILES. Convert to the requested representation.
     string_type = "smiles"  # tracks current type through the pipeline
 
+    # --murcko-scaffold runs first (independent of --inchi/--selfies below) so
+    # it composes: scaffold, then optionally convert the scaffold's SMILES to
+    # InChI/SELFIES. Output is still valid SMILES, so string_type is unchanged.
+    if args.murcko_scaffold:
+        if not RDKIT_AVAILABLE:
+            print("Error: --murcko-scaffold requires rdkit. Install with: pip install rdkit", file=sys.stderr)
+            sys.exit(1)
+        if args.verbose:
+            print("[convert] SMILES → Murcko scaffold")
+        template_strings = [smiles_to_murcko_scaffold(s) for s in template_strings]
+        library_strings = [smiles_to_murcko_scaffold(s) for s in library_strings]
+
     if args.inchi:
         if not RDKIT_AVAILABLE:
             print("Error: --inchi requires rdkit. Install with: pip install rdkit", file=sys.stderr)
@@ -6210,8 +6567,12 @@ def main():
         if args.verbose:
             layer_desc = "all layers" if layers_for_convert == "all" else f"layers: {layers_for_convert}"
             print(f"[convert] SMILES → InChI ({layer_desc})")
-        template_strings = [smiles_to_inchi_layers(s, layers_for_convert) or s for s in template_strings]
-        library_strings = [smiles_to_inchi_layers(s, layers_for_convert) or s for s in library_strings]
+        template_strings = _convert_representation(
+            template_strings, template_names, lambda s: _inchi_layers_or_none(s, layers_for_convert), "InChI (templates)"
+        )
+        library_strings = _convert_representation(
+            library_strings, library_names, lambda s: _inchi_layers_or_none(s, layers_for_convert), "InChI (database)"
+        )
         string_type = "inchi"
 
     elif args.selfies:
@@ -6220,8 +6581,8 @@ def main():
             sys.exit(1)
         if args.verbose:
             print("[convert] SMILES → SELFIES")
-        template_strings = [smiles_to_selfies(s) or s for s in template_strings]
-        library_strings = [smiles_to_selfies(s) or s for s in library_strings]
+        template_strings = _convert_representation(template_strings, template_names, _selfies_or_none, "SELFIES (templates)")
+        library_strings = _convert_representation(library_strings, library_names, _selfies_or_none, "SELFIES (database)")
         string_type = "selfies"
 
     # ── NORMALIZE (stage 3) ───────────────────────────────────────────────────
@@ -6250,6 +6611,23 @@ def main():
         print(f"[normalize] ring-digit normalization: off for string type '{string_type}' (LINGO-family methods only)")
 
     # ── AUGMENT (stage 4) ─────────────────────────────────────────────────────
+    # ELEMENT_REPLACEMENTS must run *before* shuffle/sort scramble character
+    # order, not after: preprocess_smiles() only collapses a multi-char atom
+    # (Cl, Br, @@, ...) into its single Unicode placeholder when the letters
+    # are still adjacent-and-in-order. Deferring it to the SIMILARITY stage
+    # (as for the un-augmented case, where each function calls
+    # preprocess_smiles() on the untouched string) would mean it fires only
+    # by chance after --shuffle and essentially never after --sort (alphabetic
+    # sort separates e.g. 'C' and 'l'), silently breaking the documented
+    # "same length/composition, only order differs" ordering-ablation
+    # guarantee. Applying it here instead, once, keeps that guarantee exact;
+    # preprocess_smiles() is idempotent so downstream calls with
+    # preprocess=False (already applied) or True (harmless no-op) agree.
+    if (args.shuffle or args.sort) and preprocess:
+        template_strings = [preprocess_smiles(s) for s in template_strings]
+        library_strings = [preprocess_smiles(s) for s in library_strings]
+        preprocess = False
+
     if args.shuffle:
         if args.verbose:
             seed_msg = f"seed={args.shuffle_seed}" if args.shuffle_seed is not None else "no seed"

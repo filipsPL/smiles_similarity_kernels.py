@@ -80,7 +80,11 @@ from pathlib import Path
 _INCHI_EXCLUDED = frozenset(["tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe", "tok-selfies_tfidf"])
 
 # methods invalid for SELFIES representation
-_SELFIES_EXCLUDED = frozenset(["tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe", "smifp", "lingo"])
+# "lingo" catches lingo/lingo3/lingo_tversky/lingo_tfidf/etc. by prefix, but
+# "spaced_lingo" doesn't start with "lingo" despite being the same LINGO
+# q-gram family (get_lingos on raw characters) -- needs its own entry or it
+# silently slips through onto SELFIES's bracket-token strings.
+_SELFIES_EXCLUDED = frozenset(["tok-smiles_tfidf", "tok-schwaller_tfidf", "tok-bpe", "smifp", "lingo", "spaced_lingo"])
 
 # ---------------------------------------------------------------------------
 # TF-IDF pruning
@@ -106,6 +110,93 @@ _TFIDF_KEEP_NGRAMS = frozenset(["11", "12", "44"])
 # full-vocabulary variant)
 _BPE_KEEP_SIZES = frozenset(["64", "256", "1024"])
 
+# ---------------------------------------------------------------------------
+# Redundant methods (2026-09-26 benchmark review)
+#
+# Each of these is an exact monotonic transform of, or an unconditional
+# delegation to, another registered method (documented in
+# smiles_similarity_kernels.py's own docstrings/AVAILABLE_METHODS
+# descriptions) -- it produces identical rankings and therefore identical
+# AUROC/BEDROC/EF to the method it transforms. Computing and storing it adds
+# wall-clock and disk with zero new information for the benchmark. Excluded
+# from --all-methods by default; pass --keep-redundant-methods to include
+# them anyway (e.g. to re-verify the equivalence empirically).
+#   - lingo_dice_binary    = 2*J/(1+J) of lingo_jaccard_binary
+#   - lingo_ruzicka        = lingo_tversky_similarity(alpha=1, beta=1) (delegates)
+#   - lingo_tversky_sym    = lingo_tversky_similarity(alpha=0.5, beta=0.5) = lingo_dice
+#   - spectrum_tversky_sym = spectrum_kernel_similarity(coefficient="tversky", alpha=beta=0.5)
+#                            = multiset Dice, same arithmetic as lingo_dice's family
+# ---------------------------------------------------------------------------
+REDUNDANT_METHODS = frozenset(
+    [
+        "lingo_dice_binary",
+        "lingo_ruzicka",
+        "lingo_tversky_sym",
+        "spectrum_tversky_sym",
+    ]
+)
+
+# ---------------------------------------------------------------------------
+# Expensive methods (2026-09-29 benchmark review)
+#
+# Real, measured cost -- not a heuristic guess -- from running the full
+# 14-dataset lit-pcba pass plus the (removed) MoleculeNet-HIV run:
+#   - monge_elkan_sym : 35,212s (9.8h) for ONE InChI variant on adrb2's 5.3M
+#     pairs, even with --sim-jobs 4. O(tokens1 x tokens2) per pair, run
+#     bidirectionally -- the single worst per-pair cost measured anywhere in
+#     this module.
+#   - monge_elkan     : same mechanism, single-direction (~half the cost).
+#   - mismatch5       : 18.0 CPU-days on HIV's 56.6M pairs (single-threaded,
+#     pre --sim-jobs) -- the worst HIV number by a wide margin. Also the
+#     method implicated in a ~900GB RSS blowup when combined with SELFIES
+#     representation on adrb2 (root cause not yet isolated -- see CLAUDE.md).
+#   - mismatch / mismatch3 : same combinatorial neighbourhood-expansion
+#     kernel, smaller k. HIV: 9.2 / 5.0 CPU-days respectively.
+# None of these five are in BATCH_FEATURIZERS (no vectorized/featurize-once
+# path exists for them), so they are also exactly the methods --sim-jobs
+# helps -- and even parallelized, the numbers above hold. Excluded from
+# --all-methods by default, like REDUNDANT_METHODS; pass
+# --keep-expensive-methods to include them anyway. Deliberately NOT cutting
+# edit/nlcs/clcs/token_edit/lcs_substring here -- expensive too (HIV:
+# 12.6h-1.4 CPU-days) but nowhere near this tier, and they're more
+# standard/citable methods for a benchmarking paper.
+# ---------------------------------------------------------------------------
+EXPENSIVE_METHODS = frozenset(
+    [
+        "monge_elkan",
+        "monge_elkan_sym",
+        "mismatch",
+        "mismatch3",
+        "mismatch5",
+    ]
+)
+
+
+def slow_methods() -> frozenset[str]:
+    """
+    Return the set of registered methods with no batch/vectorized fast path.
+
+    Derived directly from smiles_similarity_kernels.py's own BATCH_FEATURIZERS
+    registry and its TF-IDF family detector (_tfidf_family), rather than a
+    hand-maintained duplicate list, so it can't silently go stale as methods
+    are added or moved between the two paths.
+
+    These are exactly the methods smiles_similarity_kernels.py's own --jobs/
+    n_jobs multiprocessing path exists for ("only speeds up methods that fall
+    through to the general per-pair path"), and empirically the ones whose
+    per-pair cost is dominated by an O(len^2) DP (edit/nlcs/clcs/token_edit/
+    lcs_substring) or a combinatorial neighbourhood expansion (mismatch*) or
+    an O(tokens^2) double loop (monge_elkan*) -- on MoleculeNet-HIV's
+    inchi_all variant (1409 x 40166 = 56.6M pairs) these 14 methods alone
+    took a combined ~46+ CPU-days on a single core, while every batched
+    method (lingo*/spectrum*/smifp*/tfidf*/ncd/substring/subsequence*)
+    finished the same variant in under a day combined. See the redesign
+    notes for the 2026-09-26 benchmark review.
+    """
+    import smiles_similarity_kernels as _ssk
+
+    return frozenset(name for name in _ssk.AVAILABLE_METHODS if name not in _ssk.BATCH_FEATURIZERS and _ssk._tfidf_family(name) is None)
+
 
 # ---------------------------------------------------------------------------
 # Variant definitions
@@ -124,6 +215,15 @@ INCHI_LAYERS = [
     "formula",
     "hydrogens",
     # "stereo_tet",
+]
+
+# Multi-layer InChI combinations -- extract_inchi_layers()/smiles_to_inchi_layers()
+# already accept a list, but each combo needs its own VARIANTS entry to actually
+# be run. "connections+hydrogens" is all-structure/no-stereo: heavy-atom
+# connectivity plus H placement, without the digit-and-symbol noise the full
+# InChI's stereo layers add for molecules that don't have stereocentres.
+INCHI_LAYER_COMBOS = [
+    ["connections", "hydrogens"],
 ]
 
 
@@ -180,6 +280,18 @@ VARIANTS = [
         "description": "sorted SMILES, deterministic ordering ablation",
         "stage": "augment",
     },
+    # ── Murcko scaffold variant ────────────────────────────────────────────────
+    # Ring systems + linkers only, substituents stripped -- turns the whole
+    # method battery into scaffold similarity. Canonicalized so scaffold SMILES
+    # ordering isn't an artifact of the parent molecule's original atom order.
+    {
+        "repr": "murcko_scaffold",
+        "modifiers": ["canonical", "replaced"],
+        "extra_args": ["--murcko-scaffold", "--canonicalize"],
+        "requires": ["rdkit"],
+        "description": "Bemis-Murcko scaffold SMILES, canonicalized",
+        "stage": "convert",
+    },
     # ── InChI variants ─────────────────────────────────────────────────────────
     # ELEMENT_REPLACEMENTS is auto-disabled by the pipeline for InChI
     {
@@ -202,6 +314,20 @@ VARIANTS = [
             "excluded_method_prefixes": _INCHI_EXCLUDED,
         }
         for layer in INCHI_LAYERS
+    ],
+    *[
+        {
+            "repr": f"inchi_{'_'.join(layers)}",
+            "modifiers": [],
+            # smiles_to_inchi_layers/extract_inchi_layers already accept a list
+            # of layers; --inchi-layer just needs the comma-separated form.
+            "extra_args": ["--inchi", "--inchi-layer", ",".join(layers)],
+            "requires": ["rdkit"],
+            "description": f"InChI {'+'.join(layers)} layers combined",
+            "stage": "convert",
+            "excluded_method_prefixes": _INCHI_EXCLUDED,
+        }
+        for layers in INCHI_LAYER_COMBOS
     ],
     # ── SELFIES variant ────────────────────────────────────────────────────────
     # ELEMENT_REPLACEMENTS is auto-disabled by the pipeline for SELFIES
@@ -272,7 +398,11 @@ def _is_tfidf_method_kept(name: str) -> bool:
     return True
 
 
-def get_valid_methods(variant: dict) -> list[str] | None:
+def get_valid_methods(
+    variant: dict,
+    exclude_methods: frozenset[str] = frozenset(),
+    only_methods: list[str] | None = None,
+) -> list[str] | None:
     """
     Return the list of method names valid for this variant.
 
@@ -282,19 +412,32 @@ def get_valid_methods(variant: dict) -> list[str] | None:
     present — this is a *representation-validity* filter (e.g. tok-smiles_tfidf*
     is meaningless on InChI), independent of _PRUNE_TFIDF_GRID, and always applies.
 
-    Returns None only when no filtering at all is needed (no exclusions and
-    TF-IDF pruning is off), so the caller can use --all-methods instead.
+    exclude_methods : method names to drop regardless of the above (e.g.
+        REDUNDANT_METHODS, or slow_methods() when splitting a run in two —
+        see run_variant).
+    only_methods : if given, restricts the candidate set to exactly these
+        names before the other filters apply (e.g. slow_methods(), for a
+        template-subsampled "slow methods only" sub-run). None means "every
+        registered method is a candidate" (the normal case).
+
+    Returns None only when no filtering at all is needed (no exclusions, no
+    only_methods restriction, and TF-IDF pruning is off), so the caller can
+    use --all-methods instead.
     """
     excluded_prefixes = variant.get("excluded_method_prefixes", frozenset())
 
     import smiles_similarity_kernels as _ssk  # lazy import
 
+    candidates = _ssk.AVAILABLE_METHODS if only_methods is None else [m for m in only_methods if m in _ssk.AVAILABLE_METHODS]
+
     valid = [
-        name for name in _ssk.AVAILABLE_METHODS if not any(name.startswith(pfx) for pfx in excluded_prefixes) and _is_tfidf_method_kept(name)
+        name
+        for name in candidates
+        if not any(name.startswith(pfx) for pfx in excluded_prefixes) and _is_tfidf_method_kept(name) and name not in exclude_methods
     ]
 
     # If nothing was filtered out, signal the caller to use --all-methods
-    if len(valid) == len(_ssk.AVAILABLE_METHODS):
+    if only_methods is None and not exclude_methods and len(valid) == len(_ssk.AVAILABLE_METHODS):
         return None
 
     return valid
@@ -308,12 +451,26 @@ def run_variant(
     verbose: bool,
     dry_run: bool,
     overwrite: bool = False,
+    exclude_methods: frozenset[str] = frozenset(),
+    only_methods: list[str] | None = None,
+    sim_jobs: int = 1,
 ) -> tuple[bool, str | None, float, list[tuple[str, str, str]]]:
     """
     Run smiles_similarity_kernels.py --all-methods for one variant.
     Returns (success, skip_reason, elapsed_seconds, method_rows).
     method_rows is a list of (method, status, elapsed_s) strings from --timing-log.
     skip_reason is None on success or error; elapsed/method_rows are empty when skipped/dry-run.
+
+    exclude_methods / only_methods : see get_valid_methods.
+    sim_jobs : forwarded as smiles_similarity_kernels.py's own --jobs, i.e. the
+        number of worker *processes* used for the general per-pair path inside
+        ONE method's matrix computation (edit/nlcs/clcs/mismatch*/monge_elkan*/
+        jellyfish-based methods/...). This is independent of, and multiplies
+        with, this script's own --jobs (which parallelizes across *variants*,
+        each already its own OS process) -- size sim_jobs so
+        (variant --jobs) x sim_jobs x (dataset-level parallelism, if any)
+        does not oversubscribe the machine. Default 1 preserves the previous
+        behaviour (sequential per-pair loop) exactly.
     """
     missing = check_available(variant["requires"])
     if missing:
@@ -325,9 +482,16 @@ def run_variant(
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tf:
         timing_log = Path(tf.name)
 
-    valid_methods = get_valid_methods(variant)
+    valid_methods = get_valid_methods(variant, exclude_methods=exclude_methods, only_methods=only_methods)
     if valid_methods is None:
         method_args = ["--all-methods"]
+    elif not valid_methods:
+        # Every candidate method was filtered out for this variant (e.g. an
+        # only_methods=slow_methods() sub-run against a variant whose
+        # excluded_method_prefixes happens to remove all of them) -- nothing
+        # to do, not an error.
+        timing_log.unlink(missing_ok=True)
+        return True, "no applicable methods for this variant", 0.0, []
     else:
         method_args = ["--methods", *valid_methods]
 
@@ -345,6 +509,8 @@ def run_variant(
         str(timing_log),
         *variant["extra_args"],
     ]
+    if sim_jobs != 1:
+        cmd += ["--jobs", str(sim_jobs)]
     if verbose:
         cmd.append("--verbose")
     if overwrite:
@@ -398,10 +564,56 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--list-variants", action="store_true", help="Print all available variants and exit")
     parser.add_argument("--jobs", "-j", type=int, default=1, metavar="N", help="Run N variants in parallel (default: 1)")
+    parser.add_argument(
+        "--sim-jobs",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Worker PROCESSES for the per-pair similarity computation INSIDE each variant "
+        "(forwarded as smiles_similarity_kernels.py's own --jobs; default 1 = sequential, -1 = all "
+        "CPUs). Independent of --jobs above, which parallelizes across variants -- the two multiply, "
+        "so size them so the product does not oversubscribe the machine. Only affects methods with no "
+        "batch/vectorized path (edit/nlcs/clcs/mismatch*/monge_elkan*/jellyfish-based methods/...); "
+        "a no-op for lingo*/spectrum*/smifp*/tfidf* (already vectorized).",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Show per-method progress inside each variant run")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing them")
     parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite existing output files. Without this flag, existing files are skipped with a warning."
+    )
+    parser.add_argument(
+        "--exclude-methods",
+        nargs="+",
+        default=[],
+        metavar="METHOD",
+        help="Additional method names to exclude on top of REDUNDANT_METHODS/EXPENSIVE_METHODS (see "
+        "--keep-redundant-methods/--keep-expensive-methods to disable those default exclusions instead "
+        "of adding to them).",
+    )
+    parser.add_argument(
+        "--keep-redundant-methods",
+        action="store_true",
+        help="Do not exclude REDUNDANT_METHODS (lingo_dice_binary, lingo_ruzicka, lingo_tversky_sym, "
+        "spectrum_tversky_sym) by default -- they are exact monotonic transforms/delegations of other "
+        "registered methods and add no new ranking information, so they are skipped unless this is passed.",
+    )
+    parser.add_argument(
+        "--keep-expensive-methods",
+        action="store_true",
+        help="Do not exclude EXPENSIVE_METHODS (monge_elkan, monge_elkan_sym, mismatch, mismatch3, "
+        "mismatch5) by default -- measured as the worst per-pair cost in the module (monge_elkan_sym: "
+        "9.8h for one InChI variant on 5.3M pairs even parallelized; mismatch5: 18 CPU-days on 56.6M "
+        "pairs), so they are skipped unless this is passed.",
+    )
+    parser.add_argument(
+        "--only-methods",
+        nargs="+",
+        default=None,
+        metavar="METHOD",
+        help="Restrict the run to exactly these method names (e.g. the categorically slow, non-batch "
+        "methods, for a template-subsampled sub-run). Combines with --exclude-methods/"
+        "--keep-redundant-methods/--keep-expensive-methods and each variant's own representation-validity "
+        "exclusions.",
     )
     return parser.parse_args()
 
@@ -441,10 +653,22 @@ def main() -> None:
     selected = set(args.variants) if args.variants else None
     variants_to_run = [v for v in VARIANTS if selected is None or variant_stem(v) in selected]
 
+    exclude_methods = (
+        frozenset(args.exclude_methods)
+        | (frozenset() if args.keep_redundant_methods else REDUNDANT_METHODS)
+        | (frozenset() if args.keep_expensive_methods else EXPENSIVE_METHODS)
+    )
+
     print(f"Templates : {templates}")
     print(f"Database  : {database}")
     print(f"Output dir: {output_dir}")
     print(f"Variants  : {len(variants_to_run)}")
+    if exclude_methods:
+        print(f"Excluding : {', '.join(sorted(exclude_methods))}")
+    if args.only_methods:
+        print(f"Only      : {', '.join(args.only_methods)}")
+    if args.sim_jobs != 1:
+        print(f"Sim-jobs  : {args.sim_jobs} (per-variant per-pair worker processes)")
     print()
 
     results: dict[str, tuple[bool, str | None, float, list]] = {}
@@ -452,9 +676,20 @@ def main() -> None:
     def _run(variant: dict) -> tuple[str, bool, str | None, float, list]:
         stem = variant_stem(variant)
         print(f"  → [{stem}] {variant['description']}")
-        ok, reason, elapsed, method_rows = run_variant(templates, database, output_dir, variant, args.verbose, args.dry_run, args.overwrite)
+        ok, reason, elapsed, method_rows = run_variant(
+            templates,
+            database,
+            output_dir,
+            variant,
+            args.verbose,
+            args.dry_run,
+            args.overwrite,
+            exclude_methods=exclude_methods,
+            only_methods=args.only_methods,
+            sim_jobs=args.sim_jobs,
+        )
         if args.dry_run:
-            valid_methods = get_valid_methods(variant)
+            valid_methods = get_valid_methods(variant, exclude_methods=exclude_methods, only_methods=args.only_methods)
             method_args = ["--all-methods"] if valid_methods is None else ["--methods", *valid_methods]
             cmd = [
                 sys.executable,
@@ -466,6 +701,7 @@ def main() -> None:
                 "--output",
                 str(output_dir / f"{stem}.csv.gz"),
                 *method_args,
+                *(["--jobs", str(args.sim_jobs)] if args.sim_jobs != 1 else []),
                 *variant["extra_args"],
             ]
             print(f"     {' '.join(cmd)}")

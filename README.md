@@ -269,6 +269,17 @@ Motivated by [our paper](https://doi.org/10.1093/bib/bbaf620) where query-weight
 
 > **Binary-vs-count note:** `lingo_jaccard_binary`/`lingo_dice_binary` discard q-gram multiplicity entirely (a q-gram is either present or absent), unlike `lingo_ruzicka`/`lingo_dice` which weight repeated q-grams (long alkyl chains, fused rings) more heavily via multiset min/max arithmetic. Comparing the binary and count variants is a direct ablation of whether q-gram *repetition* carries useful signal for a given screening target. Within each encoding, Dice and Jaccard are related by the monotonic transform `DSC = 2J/(1+J)` — they rank molecule pairs identically and are not independent signals, only differently-scaled scores; `lingo_dice_binary` is implemented by applying this transform to `lingo_jaccard_binary` rather than re-deriving the set arithmetic.
 
+| CLI name       | Function                    | Description                                                                  | Requires     |
+| -------------- | ---------------------------- | ---------------------------------------------------------------------------- | ------------ |
+| `lingo_tfidf`  | `lingo_tfidf_similarity`      | LINGO q-gram TF-IDF cosine similarity, q=4 (default)                         | scikit-learn |
+| `lingo_tfidf3` | `lingo_tfidf_similarity`      | LINGO q-gram TF-IDF cosine similarity, q=3                                   | scikit-learn |
+| `lingo_tfidf5` | `lingo_tfidf_similarity`      | LINGO q-gram TF-IDF cosine similarity, q=5                                   | scikit-learn |
+| `spaced_lingo` | `spaced_lingo_similarity`     | Spaced (gapped) q-gram LINGOsim, pattern `1101` (span 4, weight 3, one gap)  | —            |
+
+> **`lingo_tfidf` note:** IDF-weighted cosine similarity over the same q-gram tokens as `lingo`/`lingo_tversky`/etc., via `LingoVectorizer`. Unlike the tokenizer-backed `tok-*_tfidf*` families, its `preprocess=` argument is **not** ignorable: `LingoVectorizer` chunks raw characters into q-grams rather than routing through a chemically-aware tokenizer, so multi-character atoms (`Cl`, `Br`, …) must be collapsed by `preprocess_smiles` first or they get split across q-gram boundaries. Follows the rest of the LINGO family's `normalize_rings=` convention (blanks ring-closure digits by default; the CLI disables this automatically under `--inchi`/`--selfies`). For matrix/batch calculations it uses the same fit-once-on-the-whole-corpus fast path as the `tok-*_tfidf*` families, despite its bare (no `tok-` prefix) name — `LingoVectorizer` isn't a tokenizer object in that sense, so it is recognised as its own case rather than renamed to fit the `tok-` naming convention.
+
+> **`spaced_lingo` note:** samples q-gram-like tokens through a spaced seed pattern (`'1'` = keep, `'0'` = gap) instead of a contiguous window — gap positions are dropped from the token rather than kept as a wildcard placeholder ("gapped k-mer" construction, cf. gkm-SVM), so a span-4/weight-3 pattern like `1101` produces 3-character tokens sampled from 4-character windows. This is established in the sequence-comparison literature (PatternHunter spaced seeds, Ma/Tromp/Li 2002; gkm-SVM, Ghandi et al. 2014) to be more sensitive than contiguous k-mers of the same weight: a single mismatching character can fall on a "don't care" position without breaking every token spanning it — for SMILES, a one-atom chain-length or ring-size difference shifts every downstream contiguous LINGO q-gram but leaves a spaced token unaffected whenever the difference lands on a gap position. Combines counts with the same averaged per-token agreement ratio as plain `lingo` (LINGOsim); the coefficient is otherwise unchanged, so the delta vs. `lingo` isolates the effect of gapped vs. contiguous token sampling specifically. Custom patterns are available via the `pattern=` argument (must start and end with `'1'`).
+
 ### Spectrum and mismatch kernels (extensions)
 
 Classical string-kernel methods from the biological-sequence literature, ported to SMILES. `spectrum`/`spectrum3`/`spectrum5`/`spectrum_cosine` return a single inner-product-based coefficient (Tanimoto, Dice, or cosine) over the full k-mer count vector. `spectrum_tversky`/`spectrum_tversky_sym`/`spectrum_overlap` instead use multiset intersection arithmetic (min/max of k-mer counts, the same mechanism as `lingo_tversky`) — a mathematically distinct normalisation from the dot-product coefficients, not a rename of `spectrum_cosine`/`_dice`.
@@ -438,7 +449,7 @@ python smiles_similarity_kernels.py \
 | `jaro`                | `jaro_similarity`                | Jaro similarity                                                                  | jellyfish |
 | `jaro_winkler`        | `jaro_winkler_similarity`        | Jaro-Winkler (prefix-weighted)                                                   | jellyfish |
 | `hamming`             | `hamming_similarity`             | Hamming distance, shorter string padded                                          | jellyfish |
-| `ncd`                 | `ncd_similarity`                 | Normalized Compression Distance via gzip; universal, parameter-free              | —         |
+| `ncd`                 | `ncd_similarity`                 | Normalized Compression Distance via raw DEFLATE (zlib); universal, parameter-free | —         |
 
 > **Token-edit note:** `token_edit` tokenizes each SMILES into chemically-meaningful units with the Schwaller atom-level tokenizer (`[nH+]`, `[C@@H]`, `Br`, ring digits and bond symbols are each one token) and computes Levenshtein distance over the *token sequences*, normalized by the larger token count: `1 - editdistance(tok(S1), tok(S2)) / max(|tok(S1)|, |tok(S2)|)`. A one-atom change costs exactly one edit — chemically more interpretable than the character-level `edit`. Pass a different `tokenizer=` (e.g. `SMILESTokenizerBPE`) to score at fragment granularity. `preprocess` is ignored: the tokenizer already handles multi-character atoms.
 
@@ -539,6 +550,20 @@ python smiles_similarity_kernels.py \
 ```
 
 > **Design note:** `ELEMENT_REPLACEMENTS` substitution (`preprocess`) is automatically **on** when string type is SMILES, and **off** for InChI and SELFIES — the pipeline tracks the current string type and sets `preprocess` accordingly. Use `--no-preprocess` to disable it for SMILES (e.g. for benchmarking raw strings). If calling similarity functions directly from Python with InChI or SELFIES, pass `preprocess=False` explicitly.
+
+### Murcko scaffold
+
+`smiles_to_murcko_scaffold()` reduces a molecule to its Bemis-Murcko scaffold — ring systems plus the linkers connecting them, with every exocyclic substituent removed — via RDKit. Running the existing method battery on scaffolds instead of whole molecules turns it into a scaffold-similarity / scaffold-hopping comparison at no extra implementation cost.
+
+```python
+from smiles_similarity_kernels import smiles_to_murcko_scaffold
+
+smiles_to_murcko_scaffold("CC(=O)Oc1ccccc1C(=O)O")  # aspirin → 'c1ccccc1'
+smiles_to_murcko_scaffold("Cc1ccccc1")               # toluene → 'c1ccccc1' (same scaffold)
+smiles_to_murcko_scaffold("CCCC")                    # acyclic → ''  (no ring system — the correct answer, not a failure)
+```
+
+CLI flag: `--murcko-scaffold`. Output is still valid SMILES, so it composes with `--inchi`/`--selfies` (scaffold extracted first, then converted) and with `--canonicalize` — canonicalizing afterward is recommended so scaffold SMILES ordering isn't an artifact of the parent molecule's original atom order. Falls back to the original string only on an actual RDKit parse failure; a genuinely acyclic input returns `""`, since every acyclic molecule sharing the same (empty) scaffold is the intended comparison, not a degenerate case to hide.
 
 ## Fingerprints
 
@@ -815,6 +840,7 @@ python smiles_similarity_kernels.py --templates TEMPLATES --database DATABASE --
 | `--list-methods`              |       | Print all available methods and exit                                                                                                                |
 | `--demo`                      |       | Run a demonstration with example molecules and exit                                                                                                 |
 | `--canonicalize`              |       | **[normalize]** Canonicalize SMILES with RDKit (SMILES only, requires rdkit)                                                                        |
+| `--murcko-scaffold`           |       | **[convert]** Replace each molecule with its Bemis-Murcko scaffold SMILES (ring systems + linkers, substituents stripped; requires rdkit). Runs before `--inchi`/`--selfies`, so it composes with them. |
 | `--inchi`                     |       | **[convert]** Convert SMILES → InChI (strips `InChI=` prefix, requires rdkit)                                                                       |
 | `--inchi-layer LAYER[,...]`   |       | **[convert]** With `--inchi`, restrict to selected layer(s). Comma-separated. Default: `all`. See [InChI layer extraction](#inchi-layer-extraction) |
 | `--selfies`                   |       | **[convert]** Convert SMILES → SELFIES (requires `selfies`)                                                                                         |
@@ -892,3 +918,5 @@ Based on methods described in:
 Original Java implementation: <https://github.com/hkmztrk/SMILESbasedSimilarityKernels>
 
 Cite **THIS** implementation using DOI: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18457244.svg)](https://doi.org/10.5281/zenodo.18457244)
+
+This research was funded in part by the National Science Centre, grant number: 2020/39/B/NZ2/03127 to FS.
